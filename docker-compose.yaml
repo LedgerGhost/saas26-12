@@ -1,0 +1,313 @@
+services:
+  # ---------- Edge ----------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: saasplug-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+      web-frontend:
+        condition: service_started
+    networks: [saasplug-net]
+
+  web-frontend:
+    build:
+      context: ./web-frontend
+      args:
+        - VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-}
+    container_name: saasplug-web
+    environment:
+      - PORT=3000
+    networks: [saasplug-net]
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: saasplug-gateway
+    environment:
+      - PORT=4000
+      - JWT_SECRET=${JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:5001
+      - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - STATIONS_SERVICE_URL=http://stations-service:5003
+      - RESERVATION_SERVICE_URL=http://reservation-service:5004
+      - BILLING_SERVICE_URL=http://billing-service:5005
+      - ANALYTICS_SERVICE_URL=http://analytics-service:5006
+    depends_on:
+      - auth-service
+      - stations-service
+      - reservation-service
+      - analytics-service
+      - provider-service
+      - billing-service
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks: [saasplug-net]
+
+  # ---------- Core services ----------
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    container_name: saasplug-auth
+    environment:
+      - PORT=5001
+      - MONGO_URI=mongodb://mongo-userdb:27017/users
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-15m}
+      - JWT_REFRESH_EXPIRES_IN=${JWT_REFRESH_EXPIRES_IN:-7d}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CALLBACK_URL=${GOOGLE_CALLBACK_URL}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
+      # Set ALLOW_DEV_LOGIN=true to keep /api/auth/dev-login reachable in production builds (course demo).
+      - ALLOW_DEV_LOGIN=${ALLOW_DEV_LOGIN:-true}
+    depends_on: [mongo-userdb]
+    networks: [saasplug-net]
+
+  provider-service:
+    build:
+      context: .
+      dockerfile: provider-service/Dockerfile
+    container_name: saasplug-provider
+    environment:
+      - PORT=5002
+      - MONGO_URI=mongodb://mongo-providerdb:27017/providers
+      - JWT_SECRET=${JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:5001
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
+    depends_on: [mongo-providerdb, auth-service]
+    networks: [saasplug-net]
+
+  stations-service:
+    build:
+      context: .
+      dockerfile: stations-service/Dockerfile
+    container_name: saasplug-stations
+    environment:
+      - PORT=5003
+      - MONGO_URI=mongodb://mongo-stationdb:27017/stations
+      - ORCHESTRATOR_URL=http://provider-orchestrator:5007
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - STATIONS_CACHE_TTL_SEC=${STATIONS_CACHE_TTL_SEC:-300}
+    depends_on: [mongo-stationdb, rabbitmq, provider-orchestrator]
+    networks: [saasplug-net]
+
+  reservation-service:
+    build:
+      context: .
+      dockerfile: reservation-service/Dockerfile
+    container_name: saasplug-reservation
+    environment:
+      - PORT=5004
+      - MONGO_URI=mongodb://mongo-reservationdb:27017/reservations
+      - ORCHESTRATOR_URL=http://provider-orchestrator:5007
+      - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on: [mongo-reservationdb, rabbitmq, provider-orchestrator]
+    networks: [saasplug-net]
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: services/analytics-service/Dockerfile
+    container_name: saasplug-analytics
+    environment:
+      - PORT=5006
+      - MONGO_URI=mongodb://mongo-analyticsdb:27017/analytics
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
+    depends_on: [mongo-analyticsdb, rabbitmq]
+    networks: [saasplug-net]
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: services/billing-service/Dockerfile
+    container_name: saasplug-billing
+    environment:
+      - PORT=5005
+      - MONGO_URI=mongodb://mongo-billingdb:27017/billing
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
+      - MOCK_PAYMENTS_URL=http://mock-payments:5008
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    depends_on: [mongo-billingdb, rabbitmq, mock-payments]
+    networks: [saasplug-net]
+
+  mock-payments:
+    build:
+      context: .
+      dockerfile: mock-payments/Dockerfile
+    container_name: saasplug-mock-payments
+    environment:
+      - PORT=5008
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    networks: [saasplug-net]
+
+  stripe-cli:
+    image: stripe/stripe-cli:latest
+    container_name: saasplug-stripe-cli
+    depends_on:
+      - billing-service
+    environment:
+      - STRIPE_API_KEY=${STRIPE_SECRET_KEY}
+    # Notice we forward to 'billing-service' instead of 'localhost'
+    command: listen --forward-to http://billing-service:5005/api/invoices/webhooks/stripe
+    networks:
+      - saasplug-net
+
+  # ---------- Provider integration ----------
+  provider-orchestrator:
+    build:
+      context: .
+      dockerfile: provider-orchestrator/Dockerfile
+    container_name: saasplug-orchestrator
+    environment:
+      - PORT=5007
+      - REDPLUG_URL=http://redplug-service:5010
+      - GREENPLUG_URL=http://greenplug-service:5011
+      - BLUEPLUG_URL=http://blueplug-service:5012
+      - VALKEY_URL=redis://valkey-orchestrator:6379
+    depends_on: [redplug-service, greenplug-service, blueplug-service, valkey-orchestrator]
+    networks: [saasplug-net]
+
+  redplug-service:
+    build:
+      context: .
+      dockerfile: redplug-service/Dockerfile
+    container_name: saasplug-redplug
+    environment:
+      - PORT=5010
+      - PROVIDER_ID=redPlug
+      - PROVIDER_API_BASE_URL=${REDPLUG_API_BASE_URL}
+      - PROVIDER_API_KEY=${REDPLUG_API_KEY}
+      - VALKEY_URL=redis://valkey-redplug:6379
+    depends_on: [valkey-redplug]
+    networks: [saasplug-net]
+
+  greenplug-service:
+    build:
+      context: .
+      dockerfile: greenplug-service/Dockerfile
+    container_name: saasplug-greenplug
+    environment:
+      - PORT=5011
+      - PROVIDER_ID=greenPlug
+      - PROVIDER_API_BASE_URL=${GREENPLUG_API_BASE_URL}
+      - PROVIDER_API_KEY=${GREENPLUG_API_KEY}
+      - VALKEY_URL=redis://valkey-greenplug:6379
+    depends_on: [valkey-greenplug]
+    networks: [saasplug-net]
+
+  blueplug-service:
+    build:
+      context: .
+      dockerfile: blueplug-service/Dockerfile
+    container_name: saasplug-blueplug
+    environment:
+      - PORT=5012
+      - PROVIDER_ID=bluePlug
+      - PROVIDER_API_BASE_URL=${BLUEPLUG_API_BASE_URL}
+      - PROVIDER_API_KEY=${BLUEPLUG_API_KEY}
+      - VALKEY_URL=redis://valkey-blueplug:6379
+    depends_on: [valkey-blueplug]
+    networks: [saasplug-net]
+
+  # ---------- Infrastructure ----------
+  valkey-redplug:
+    image: valkey/valkey:8-alpine
+    container_name: saasplug-valkey-redplug
+    networks: [saasplug-net]
+
+  valkey-greenplug:
+    image: valkey/valkey:8-alpine
+    container_name: saasplug-valkey-greenplug
+    networks: [saasplug-net]
+
+  valkey-blueplug:
+    image: valkey/valkey:8-alpine
+    container_name: saasplug-valkey-blueplug
+    networks: [saasplug-net]
+
+  valkey-orchestrator:
+    image: valkey/valkey:8-alpine
+    container_name: saasplug-valkey-orchestrator
+    networks: [saasplug-net]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: saasplug-rabbitmq
+    ports:
+      - "15672:15672"   # management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-saasplug}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS:-saasplug}
+    networks: [saasplug-net]
+
+  mongo-userdb:
+    image: mongo:7
+    container_name: saasplug-mongo-userdb
+    volumes: [userdb-data:/data/db]
+    networks: [saasplug-net]
+
+  mongo-providerdb:
+    image: mongo:7
+    container_name: saasplug-mongo-providerdb
+    volumes: [providerdb-data:/data/db]
+    networks: [saasplug-net]
+
+  mongo-stationdb:
+    image: mongo:7
+    container_name: saasplug-mongo-stationdb
+    volumes: [stationdb-data:/data/db]
+    networks: [saasplug-net]
+
+  mongo-reservationdb:
+    image: mongo:7
+    container_name: saasplug-mongo-reservationdb
+    volumes: [reservationdb-data:/data/db]
+    networks: [saasplug-net]
+
+  mongo-analyticsdb:
+    image: mongo:7
+    container_name: saasplug-mongo-analyticsdb
+    volumes: [analyticsdb-data:/data/db]
+    networks: [saasplug-net]
+
+  mongo-billingdb:
+    image: mongo:7
+    container_name: saasplug-mongo-billingdb
+    volumes: [billingdb-data:/data/db]
+    networks: [saasplug-net]
+
+networks:
+  saasplug-net:
+    driver: bridge
+
+volumes:
+  userdb-data:
+  providerdb-data:
+  stationdb-data:
+  reservationdb-data:
+  analyticsdb-data:
+  billingdb-data:
