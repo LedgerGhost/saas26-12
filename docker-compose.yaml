@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # ---------- Edge ----------
   nginx:
@@ -78,7 +80,7 @@ services:
   provider-service:
     build:
       context: .
-      dockerfile: provider-service/Dockerfile
+      dockerfile: provider-registration/Dockerfile
     container_name: saasplug-provider
     environment:
       - PORT=5002
@@ -92,7 +94,7 @@ services:
   stations-service:
     build:
       context: .
-      dockerfile: stations-service/Dockerfile
+      dockerfile: stations-importer/Dockerfile
     container_name: saasplug-stations
     environment:
       - PORT=5003
@@ -107,7 +109,7 @@ services:
   reservation-service:
     build:
       context: .
-      dockerfile: reservation-service/Dockerfile
+      dockerfile: reservations/Dockerfile
     container_name: saasplug-reservation
     environment:
       - PORT=5004
@@ -123,7 +125,7 @@ services:
   analytics-service:
     build:
       context: .
-      dockerfile: services/analytics-service/Dockerfile
+      dockerfile: analytics/Dockerfile
     container_name: saasplug-analytics
     environment:
       - PORT=5006
@@ -138,7 +140,7 @@ services:
   billing-service:
     build:
       context: .
-      dockerfile: services/billing-service/Dockerfile
+      dockerfile: billing/Dockerfile
     container_name: saasplug-billing
     environment:
       - PORT=5005
@@ -156,7 +158,7 @@ services:
   mock-payments:
     build:
       context: .
-      dockerfile: mock-payments/Dockerfile
+      dockerfile: payments/Dockerfile
     container_name: saasplug-mock-payments
     environment:
       - PORT=5008
@@ -194,7 +196,7 @@ services:
   redplug-service:
     build:
       context: .
-      dockerfile: redplug-service/Dockerfile
+      dockerfile: redplug/Dockerfile
     container_name: saasplug-redplug
     environment:
       - PORT=5010
@@ -208,7 +210,7 @@ services:
   greenplug-service:
     build:
       context: .
-      dockerfile: greenplug-service/Dockerfile
+      dockerfile: greenplug/Dockerfile
     container_name: saasplug-greenplug
     environment:
       - PORT=5011
@@ -222,7 +224,7 @@ services:
   blueplug-service:
     build:
       context: .
-      dockerfile: blueplug-service/Dockerfile
+      dockerfile: blueplug/Dockerfile
     container_name: saasplug-blueplug
     environment:
       - PORT=5012
