@@ -29,7 +29,7 @@ services:
   api-gateway:
     build:
       context: .
-      dockerfile: api-gateway/Dockerfile
+      dockerfile: ./api-gateway/Dockerfile
     container_name: saasplug-gateway
     environment:
       - PORT=4000
@@ -59,7 +59,7 @@ services:
   auth-service:
     build:
       context: .
-      dockerfile: auth-service/Dockerfile
+      dockerfile: ./auth-service/Dockerfile
     container_name: saasplug-auth
     environment:
       - PORT=5001
@@ -80,7 +80,7 @@ services:
   provider-service:
     build:
       context: .
-      dockerfile: provider-registration/Dockerfile
+      dockerfile: ./provider-registration/Dockerfile
     container_name: saasplug-provider
     environment:
       - PORT=5002
@@ -94,7 +94,7 @@ services:
   stations-service:
     build:
       context: .
-      dockerfile: stations-importer/Dockerfile
+      dockerfile: ./stations-importer/Dockerfile
     container_name: saasplug-stations
     environment:
       - PORT=5003
@@ -109,7 +109,7 @@ services:
   reservation-service:
     build:
       context: .
-      dockerfile: reservations/Dockerfile
+      dockerfile: ./reservations/Dockerfile
     container_name: saasplug-reservation
     environment:
       - PORT=5004
@@ -125,7 +125,7 @@ services:
   analytics-service:
     build:
       context: .
-      dockerfile: analytics/Dockerfile
+      dockerfile: ./analytics/Dockerfile
     container_name: saasplug-analytics
     environment:
       - PORT=5006
@@ -140,7 +140,7 @@ services:
   billing-service:
     build:
       context: .
-      dockerfile: billing/Dockerfile
+      dockerfile: ./billing/Dockerfile
     container_name: saasplug-billing
     environment:
       - PORT=5005
@@ -157,8 +157,8 @@ services:
 
   mock-payments:
     build:
-      context: .
-      dockerfile: payments/Dockerfile
+      context: ./payments
+      dockerfile: Dockerfile
     container_name: saasplug-mock-payments
     environment:
       - PORT=5008
@@ -182,7 +182,7 @@ services:
   provider-orchestrator:
     build:
       context: .
-      dockerfile: provider-orchestrator/Dockerfile
+      dockerfile: ./provider-orchestrator/Dockerfile
     container_name: saasplug-orchestrator
     environment:
       - PORT=5007
@@ -196,7 +196,7 @@ services:
   redplug-service:
     build:
       context: .
-      dockerfile: redplug/Dockerfile
+      dockerfile: ./redplug/Dockerfile
     container_name: saasplug-redplug
     environment:
       - PORT=5010
@@ -210,7 +210,7 @@ services:
   greenplug-service:
     build:
       context: .
-      dockerfile: greenplug/Dockerfile
+      dockerfile: ./greenplug/Dockerfile
     container_name: saasplug-greenplug
     environment:
       - PORT=5011
@@ -224,7 +224,7 @@ services:
   blueplug-service:
     build:
       context: .
-      dockerfile: blueplug/Dockerfile
+      dockerfile: ./blueplug/Dockerfile
     container_name: saasplug-blueplug
     environment:
       - PORT=5012
