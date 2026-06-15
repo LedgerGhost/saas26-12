@@ -195,7 +195,7 @@ exports.createCheckoutSession = async (req, res) => {
     if (invoice.status === 'VOID') return res.status(409).json({ error: 'INVOICE_VOID' });
     if (invoice.status === 'PENDING') return res.status(409).json({ error: 'INVOICE_PENDING', message: 'Draft invoices cannot be paid until the month concludes.' });
 
-    const gatewayUrl = (process.env.PAYMENTS_SERVICE_URL || 'http://mock-payments:5008') + '/create-checkout-session';
+    const gatewayUrl = (process.env.PAYMENTS_SERVICE_URL || 'http://payments:5008') + '/create-checkout-session';
     const r = await axios.post(gatewayUrl, { amount: invoice.totalAmount, currency: invoice.currency, invoiceId: invoice._id.toString(), successUrl, cancelUrl }, { timeout: 10_000 });
     res.status(200).json({ url: r.data.url });
   } catch (err) {

@@ -233,7 +233,7 @@ function InvoiceDetail({ invoice, onBack, onPaid }: {
     doc.setTextColor(33, 37, 41);
     doc.text("Total Amount Due:", 14, 110);
     doc.setFont('helvetica', 'bold');
-    doc.text(`€${invoice.totalAmount.toFixed(2)}`, 60, 110);
+    doc.text(`${invoice.totalAmount.toFixed(2)}` + ' €', 65, 110);
     doc.setFont('helvetica', 'normal');
 
     // --- PAGE 2: Table ---
