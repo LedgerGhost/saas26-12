@@ -6,7 +6,7 @@ const StationCache = require('../models/StationCache');
  *  - On reservation.confirmed: mark the station OCCUPIED immediately so subsequent
  *    map searches reflect reality without waiting for the cache TTL. Then refresh
  *    from the upstream provider in the background.
- *  - On reservation.rejected: just opportunistically refresh.
+ *  - On reservation.cancelled/rejected: opportunistically refresh from the provider.
  */
 module.exports = async function eventHandler(routingKey, payload) {
   const stationId = payload?.stationId;
@@ -22,6 +22,18 @@ module.exports = async function eventHandler(routingKey, payload) {
       );
     } catch (err) {
       console.warn(`[stations-service] cache optimistic update failed for ${stationId}:`, err.message);
+    }
+  }
+
+  if (routingKey === 'reservation.cancelled') {
+    try {
+      await StationCache.findOneAndUpdate(
+        { stationId },
+        { lastSyncedAt: new Date() },
+        { upsert: false }
+      );
+    } catch (err) {
+      console.warn(`[stations-service] cache cancellation update failed for ${stationId}:`, err.message);
     }
   }
 

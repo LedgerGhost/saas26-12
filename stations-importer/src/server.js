@@ -11,7 +11,7 @@ const eventHandler = require('./services/eventHandler');
   // Listen for reservation outcomes so we can keep station status fresh.
   await subscribe(
     'stations-service.events',
-    ['reservation.confirmed', 'reservation.rejected'],
+    ['reservation.confirmed', 'reservation.rejected', 'reservation.cancelled'],
     eventHandler
   );
 

@@ -2,10 +2,18 @@ const Charge = require('../models/Charge');
 
 /**
  * Consumes reservation.confirmed events and accumulates Charges per provider.
-* Payload (from reservation-service):
+ * On reservation.cancelled, removes an un-invoiced charge for that reservation.
+ * Payload (from reservation-service):
  *   { reservationId, userId, stationId, providerId, chargeAmount, currency, stationId endTime, ts }
  */
 module.exports = async function eventHandler(routingKey, payload) {
+  if (routingKey === 'reservation.cancelled') {
+    const { reservationId } = payload || {};
+    if (!reservationId) return;
+    await Charge.deleteOne({ reservationId, invoicedAt: null });
+    return;
+  }
+
   if (routingKey !== 'reservation.confirmed') return;
   const { reservationId, providerId, chargeAmount, currency, stationId, endTime } = payload || {};
   

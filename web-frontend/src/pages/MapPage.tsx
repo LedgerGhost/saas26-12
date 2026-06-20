@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Icon } from '../lib/Icon';
 import { StatusBadge } from '../lib/charts';
+import {
+  isReservationLive,
+  useReservationClock,
+  type ReservationStatus,
+  type TimedReservation
+} from '../lib/reservations';
 
 type ApiStatus = 'AVAILABLE' | 'OCCUPIED' | 'OUT_OF_SERVICE' | 'UNKNOWN';
 type Station = {
@@ -18,6 +24,19 @@ type Station = {
   capacityKw?: number;
   lastUpdatedAt?: string;
 };
+type ActiveReservation = {
+  reservationId: string;
+  stationId: string;
+  status: ReservationStatus;
+  endTime?: string;
+  createdAt?: string;
+};
+type StationFocusTarget = { station: Station; key: number };
+type ReservationActionTarget = {
+  stationId: string;
+  label: string;
+  station?: Station;
+};
 
 // Map backend ALL_CAPS → design's lowercase tokens used in CSS .badge-* classes
 const API_TO_TOKEN: Record<ApiStatus, 'available' | 'occupied' | 'offline' | 'unknown'> = {
@@ -27,14 +46,25 @@ const API_TO_TOKEN: Record<ApiStatus, 'available' | 'occupied' | 'offline' | 'un
 const TOKEN_COLOR: Record<string, string> = {
   available: '#16a34a', occupied: '#f59e0b', offline: '#dc2626', unknown: '#71717a'
 };
+const PROVIDER_OPTIONS = [
+  { id: 'redPlug', label: 'RedPlug' },
+  { id: 'greenPlug', label: 'GreenPlug' },
+  { id: 'bluePlug', label: 'BluePlug' }
+];
 
 const ATHENS: [number, number] = [37.9838, 23.7275];
+const WORLD_MIN_ZOOM_FLOOR = 2;
+const WORLD_BOUNDS: L.LatLngBoundsExpression = [
+  [-85.05112878, -180],
+  [85.05112878, 180]
+];
 
 export default function MapPage() {
   const { user } = useAuth();
   const readOnly = user?.role === 'operator';
 
   const [stations, setStations] = useState<Station[]>([]);
+  const [activeReservations, setActiveReservations] = useState<Record<string, ActiveReservation>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [filters, setFilters] = useState({
@@ -42,16 +72,63 @@ export default function MapPage() {
   });
   const [nameQuery, setNameQuery] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
+  const [providerId, setProviderId] = useState('');
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null);
   const [reserving, setReserving] = useState<Station | null>(null);
   const [confirmation, setConfirmation] = useState<any>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [recenterKey, setRecenterKey] = useState(0);
+  const [lastReservation, setLastReservation] = useState<any>(null);
+  const [focusedReservationStationId, setFocusedReservationStationId] = useState<string | null>(null);
+  const [focusTarget, setFocusTarget] = useState<StationFocusTarget | null>(null);
+  const markerRefs = useRef<Record<string, L.CircleMarker | null>>({});
+  const reservationClockItems = useMemo<TimedReservation[]>(() => {
+    const reservations = Object.values(activeReservations);
+    if (lastReservation?.endTime) {
+      reservations.push({ status: 'CONFIRMED', endTime: lastReservation.endTime });
+    }
+    return reservations;
+  }, [activeReservations, lastReservation]);
+  const reservationNow = useReservationClock(reservationClockItems);
+  const liveActiveReservations = useMemo(() => (
+    Object.values(activeReservations)
+      .filter(reservation => isReservationLive(reservation, reservationNow))
+      .reduce((acc: Record<string, ActiveReservation>, reservation) => {
+        acc[reservation.stationId] = reservation;
+        return acc;
+      }, {})
+  ), [activeReservations, reservationNow]);
+  const hasLiveLastReservation = !!lastReservation && isReservationLive(
+    { status: 'CONFIRMED', endTime: lastReservation.endTime },
+    reservationNow
+  );
+  const reservationActionTarget = useMemo<ReservationActionTarget | null>(() => {
+    if (hasLiveLastReservation && lastReservation?.station?.stationId) {
+      return {
+        stationId: lastReservation.station.stationId,
+        station: lastReservation.station,
+        label: lastReservation.station.name || lastReservation.station.stationId
+      };
+    }
+
+    const reservation = Object.values(liveActiveReservations)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0];
+    if (!reservation) return null;
+
+    const station = stations.find(s => s.stationId === reservation.stationId);
+    return {
+      stationId: reservation.stationId,
+      station,
+      label: station?.name || reservation.stationId
+    };
+  }, [hasLiveLastReservation, lastReservation, liveActiveReservations, stations]);
 
   async function fetchStations() {
     setLoading(true); setErr(null);
     try {
       const params: any = {};
       if (appliedQuery) params.q = appliedQuery;
+      if (providerId) params.providerId = providerId;
       const r = await api.get('/stations', { params });
       setStations(r.data?.stations || []);
       setLastSync(new Date());
@@ -59,23 +136,94 @@ export default function MapPage() {
       setErr(e.response?.data?.message || e.message);
     } finally { setLoading(false); }
   }
-  useEffect(() => { fetchStations(); /* eslint-disable-next-line */ }, [appliedQuery]);
+  useEffect(() => { fetchStations(); /* eslint-disable-next-line */ }, [appliedQuery, providerId]);
+
+  async function fetchActiveReservations() {
+    if (!user || readOnly) {
+      setActiveReservations({});
+      return;
+    }
+    try {
+      const r = await api.get('/reservations');
+      const active = (r.data?.reservations || [])
+        .filter((reservation: ActiveReservation) => isReservationLive(reservation))
+        .reduce((acc: Record<string, ActiveReservation>, reservation: ActiveReservation) => {
+          acc[reservation.stationId] = reservation;
+          return acc;
+        }, {});
+      setActiveReservations(active);
+    } catch {
+      setActiveReservations({});
+    }
+  }
+  useEffect(() => { fetchActiveReservations(); /* eslint-disable-next-line */ }, [user?._id, readOnly]);
 
   // Apply status filters client-side using the design's tokens.
   const visible = useMemo(() => stations.filter(s => filters[API_TO_TOKEN[s.status]]), [stations, filters]);
 
+  function clearStationFocus() {
+    setFocusedReservationStationId(null);
+    setFocusTarget(null);
+  }
+
+  function recenterToCurrentStations() {
+    clearStationFocus();
+    setRecenterKey(key => key + 1);
+  }
+
+  async function getReservationStation(target: ReservationActionTarget): Promise<Station> {
+    const knownStation = target.station || stations.find(station => station.stationId === target.stationId);
+    if (knownStation) return knownStation;
+
+    const r = await api.get(`/stations/${encodeURIComponent(target.stationId)}`);
+    return r.data;
+  }
+
+  async function showReservedStation() {
+    if (!reservationActionTarget) return;
+    let station: Station;
+    try {
+      station = await getReservationStation(reservationActionTarget);
+    } catch (e: any) {
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+      setToast({ kind: 'error', msg: `Could not load reserved station: ${msg}` });
+      setTimeout(() => setToast(null), 4000);
+      return;
+    }
+
+    setFilters({ available: true, occupied: true, offline: true, unknown: true });
+    setProviderId('');
+    setNameQuery('');
+    setAppliedQuery('');
+    setStations(current => (
+      current.some(existing => existing.stationId === station.stationId)
+        ? current.map(existing => existing.stationId === station.stationId ? { ...existing, ...station } : existing)
+        : [station, ...current]
+    ));
+    setFocusedReservationStationId(station.stationId);
+    setFocusTarget({ station, key: Date.now() });
+  }
+
+  function toggleStatusFilter(name: keyof typeof filters) {
+    clearStationFocus();
+    setFilters(current => ({ ...current, [name]: !current[name] }));
+  }
+
   async function reserve(station: Station, minutes: number) {
     try {
       const r = await api.post('/reservations', { stationId: station.stationId, minutes });
-      setConfirmation({
+      const reservation = {
         station, minutes,
+        endTime: r.data?.endTime || null,
         confId: r.data?.reservationId?.slice(-6).toUpperCase() || '—',
         end: r.data?.endTime ? new Date(r.data.endTime).toTimeString().slice(0, 5) : '—',
         cost: r.data?.chargeAmount ? r.data.chargeAmount.toFixed(2) : '0.00',
         currency: r.data?.currency || 'EUR'
-      });
+      };
+      setConfirmation(reservation);
+      setLastReservation(reservation);
       setReserving(null);
-      fetchStations();
+      await Promise.all([fetchStations(), fetchActiveReservations()]);
     } catch (e: any) {
       const msg = e.response?.data?.message || e.response?.data?.error || e.message;
       setToast({ kind: 'error', msg: `Reservation failed: ${msg}` });
@@ -87,26 +235,77 @@ export default function MapPage() {
     }
   }
 
+  async function cancelReservation(reservation: ActiveReservation) {
+    try {
+      await api.post(`/reservations/${encodeURIComponent(reservation.reservationId)}/cancel`);
+      setToast({ kind: 'success', msg: 'Reservation cancelled.' });
+      setLastReservation((current: any) => (
+        current?.station?.stationId === reservation.stationId ? null : current
+      ));
+      clearStationFocus();
+      await Promise.all([fetchStations(), fetchActiveReservations()]);
+    } catch (e: any) {
+      if (e.response?.data?.reservation) {
+        await fetchActiveReservations();
+      }
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+      setToast({ kind: 'error', msg: `Cancellation failed: ${msg}` });
+    } finally {
+      setTimeout(() => setToast(null), 4000);
+    }
+  }
+
   return (
-    <div className="map-wrap" style={{ flex: 1, position: 'relative' }}>
-      <MapContainer center={ATHENS} zoom={13} zoomControl={false} style={{ height: '100%', width: '100%' }}>
-        <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <FitToStations stations={visible} />
+    <div className={`map-wrap${reservationActionTarget && !confirmation ? ' has-reservation-action' : ''}`} style={{ flex: 1, position: 'relative' }}>
+      <MapContainer
+        center={ATHENS}
+        zoom={13}
+        minZoom={WORLD_MIN_ZOOM_FLOOR}
+        maxBounds={WORLD_BOUNDS}
+        maxBoundsViscosity={1}
+        zoomControl={false}
+        style={{ height: '100%', width: '100%' }}
+      >
+        <TileLayer
+          attribution="&copy; OpenStreetMap"
+          bounds={WORLD_BOUNDS}
+          noWrap
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <MapViewportGuards />
+        <FitToStations stations={visible} recenterKey={recenterKey} />
+        <FocusStation
+          target={focusTarget}
+          markerRefs={markerRefs}
+        />
         {visible.map(st => {
           const token = API_TO_TOKEN[st.status];
           const color = TOKEN_COLOR[token];
+          const activeReservation = liveActiveReservations[st.stationId];
           return (
             <CircleMarker
               key={st.stationId}
+              ref={node => { markerRefs.current[st.stationId] = node; }}
               center={[st.latitude, st.longitude]}
-              pathOptions={{ color: 'white', weight: 3, fillColor: color, fillOpacity: 1 }}
-              radius={8}
+              pathOptions={{
+                color: focusedReservationStationId === st.stationId ? 'var(--accent)' : 'white',
+                weight: focusedReservationStationId === st.stationId ? 5 : 3,
+                fillColor: color,
+                fillOpacity: 1
+              }}
+              radius={focusedReservationStationId === st.stationId ? 11 : 8}
               eventHandlers={{
                 click: () => { api.get(`/stations/${encodeURIComponent(st.stationId)}`).catch(() => {}); }
               }}
             >
               <Popup>
-                <StationPopupContent station={st} readOnly={readOnly} onReserve={() => setReserving(st)} />
+                <StationPopupContent
+                  station={st}
+                  readOnly={readOnly}
+                  activeReservation={activeReservation}
+                  onReserve={() => setReserving(st)}
+                  onCancelReservation={() => activeReservation && cancelReservation(activeReservation)}
+                />
               </Popup>
             </CircleMarker>
           );
@@ -114,54 +313,92 @@ export default function MapPage() {
       </MapContainer>
 
       {/* Floating chrome */}
-      <form
-        className="map-float map-search"
-        onSubmit={e => { e.preventDefault(); setAppliedQuery(nameQuery.trim()); }}
-        style={{ width: 'min(380px, calc(100% - 32px))' }}
-      >
-        <Icon name="search" size={16} style={{ color: 'var(--text-3)', marginRight: 8 }} />
-        <input
-          value={nameQuery}
-          onChange={e => setNameQuery(e.target.value)}
-          placeholder="Search by station name or id…"
-        />
-        {appliedQuery && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setNameQuery(''); setAppliedQuery(''); }}>
-            <Icon name="x" size={12} />
-          </button>
-        )}
-        <div className="kbd" style={{ marginLeft: 6 }}>⏎</div>
-      </form>
+      <div className="map-ui-layer">
+        <form
+          className="map-float map-search"
+          onSubmit={e => { e.preventDefault(); clearStationFocus(); setAppliedQuery(nameQuery.trim()); }}
+          style={{ width: 'min(380px, calc(100% - 32px))' }}
+        >
+          <Icon name="search" size={16} style={{ color: 'var(--text-3)', marginRight: 8 }} />
+          <input
+            value={nameQuery}
+            onChange={e => setNameQuery(e.target.value)}
+            placeholder="Search by station name or id…"
+          />
+          {appliedQuery && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { clearStationFocus(); setNameQuery(''); setAppliedQuery(''); }}>
+              <Icon name="x" size={12} />
+            </button>
+          )}
+          <div className="kbd" style={{ marginLeft: 6 }}>⏎</div>
+        </form>
 
-      <div className="map-float map-filters">
-        {(['available', 'occupied', 'offline', 'unknown'] as const).map(f => (
-          <button
-            key={f}
-            className="filter-chip"
-            aria-pressed={filters[f]}
-            onClick={() => setFilters({ ...filters, [f]: !filters[f] })}
+        <div className="map-float map-provider">
+          <Icon name="building" size={15} style={{ color: 'var(--text-3)' }} />
+          <select
+            aria-label="Provider"
+            value={providerId}
+            onChange={e => { clearStationFocus(); setProviderId(e.target.value); }}
           >
-            <span className="dot" style={{ background: TOKEN_COLOR[f] }} />
-            {f === 'offline' ? 'Offline' : f.charAt(0).toUpperCase() + f.slice(1)}
-          </button>
-        ))}
-      </div>
+            <option value="">All providers</option>
+            {PROVIDER_OPTIONS.map(provider => (
+              <option key={provider.id} value={provider.id}>{provider.label}</option>
+            ))}
+          </select>
+          {providerId && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { clearStationFocus(); setProviderId(''); }}>
+              <Icon name="x" size={12} />
+            </button>
+          )}
+        </div>
 
-      <div className="map-float" style={{ left: 16, bottom: 24, padding: '12px 14px', display: 'flex', gap: 14, alignItems: 'center' }}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span className="t-micro">Showing</span>
-          <span style={{ fontSize: 15, fontWeight: 600 }} className="t-num">{visible.length} stations</span>
+        <div className="map-float map-filters">
+          {(['available', 'occupied', 'offline', 'unknown'] as const).map(f => (
+            <button
+              key={f}
+              className="filter-chip"
+              aria-pressed={filters[f]}
+              onClick={() => toggleStatusFilter(f)}
+            >
+              <span className="dot" style={{ background: TOKEN_COLOR[f] }} />
+              {f === 'offline' ? 'Offline' : f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
         </div>
-        <div style={{ width: 1, height: 24, background: 'var(--border)' }} />
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span className="t-micro">Athens</span>
-          <span className="t-small" style={{ color: 'var(--text-2)' }}>
-            {loading ? 'Loading…' : lastSync ? `Updated ${ago(lastSync)}` : '—'}
-          </span>
+
+        {reservationActionTarget && !confirmation && (
+          <div className="map-float map-reservation-action">
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span className="t-micro">Reserved</span>
+              <span className="t-small" style={{ color: 'var(--text-2)' }}>
+                {reservationActionTarget.label}
+              </span>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={showReservedStation}>
+              <Icon name="map" size={13} /> Show my station reservation
+            </button>
+          </div>
+        )}
+
+        <div className="map-float map-status">
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span className="t-micro">Showing</span>
+            <span style={{ fontSize: 15, fontWeight: 600 }} className="t-num">{visible.length} stations</span>
+          </div>
+          <div style={{ width: 1, height: 24, background: 'var(--border)' }} />
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span className="t-micro">Athens</span>
+            <span className="t-small" style={{ color: 'var(--text-2)' }}>
+              {loading ? 'Loading…' : lastSync ? `Updated ${ago(lastSync)}` : '—'}
+            </span>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={fetchStations} disabled={loading}>
+            <Icon name="history" size={13} /> Refresh
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={recenterToCurrentStations} disabled={loading}>
+            <Icon name="map" size={13} /> Re-center
+          </button>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={fetchStations} disabled={loading}>
-          <Icon name="history" size={13} /> Refresh
-        </button>
       </div>
 
       {/* Modals + toasts */}
@@ -191,18 +428,92 @@ function ago(d: Date): string {
   return d.toLocaleTimeString();
 }
 
-function FitToStations({ stations }: { stations: Station[] }) {
+function FitToStations({ stations, recenterKey }: { stations: Station[]; recenterKey: number }) {
   const map = useMap();
   useEffect(() => {
-    if (!stations.length) return;
+    if (!stations.length) {
+      map.setView(ATHENS, 13);
+      return;
+    }
     const bounds = L.latLngBounds(stations.map(s => [s.latitude, s.longitude] as [number, number]));
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
-  }, [stations, map]);
+  }, [stations, map, recenterKey]);
   return null;
 }
 
-function StationPopupContent({ station, readOnly, onReserve }: {
-  station: Station; readOnly: boolean; onReserve: () => void;
+function FocusStation({
+  target,
+  markerRefs
+}: {
+  target: StationFocusTarget | null;
+  markerRefs: MutableRefObject<Record<string, L.CircleMarker | null>>;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!target) return;
+    const station = target.station;
+
+    const stationLatLng = L.latLng(station.latitude, station.longitude);
+    if (map.getZoom() < 13) {
+      map.setZoom(13, { animate: false });
+    }
+    map.panTo(stationLatLng, { animate: true, duration: 0.45 });
+
+    const timers = [450, 900, 1400].map(delay => window.setTimeout(() => {
+      markerRefs.current[station.stationId]?.openPopup();
+    }, delay));
+
+    return () => timers.forEach(window.clearTimeout);
+  }, [target?.key, map, markerRefs]);
+
+  return null;
+}
+
+function MapViewportGuards() {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const applyGuards = () => {
+      map.invalidateSize({ animate: false });
+
+      const largestSide = Math.max(container.clientWidth, container.clientHeight);
+      const minZoomForViewport = Math.max(
+        WORLD_MIN_ZOOM_FLOOR,
+        Math.ceil(Math.log2(Math.max(largestSide, 256) / 256))
+      );
+
+      if (map.getMinZoom() !== minZoomForViewport) {
+        map.setMinZoom(minZoomForViewport);
+      }
+      if (map.getZoom() < minZoomForViewport) {
+        map.setZoom(minZoomForViewport, { animate: false });
+      }
+      map.panInsideBounds(L.latLngBounds(WORLD_BOUNDS), { animate: false });
+    };
+
+    const frame = window.requestAnimationFrame(applyGuards);
+    const timeout = window.setTimeout(applyGuards, 150);
+    const observer = new ResizeObserver(applyGuards);
+
+    observer.observe(container);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      observer.disconnect();
+    };
+  }, [map]);
+
+  return null;
+}
+
+function StationPopupContent({ station, readOnly, activeReservation, onReserve, onCancelReservation }: {
+  station: Station;
+  readOnly: boolean;
+  activeReservation?: ActiveReservation;
+  onReserve: () => void;
+  onCancelReservation: () => void;
 }) {
   const token = API_TO_TOKEN[station.status];
   return (
@@ -226,6 +537,14 @@ function StationPopupContent({ station, readOnly, onReserve }: {
           <div className="t-small muted" style={{ flex: 1, textAlign: 'center', padding: '8px 0' }}>
             Operators have read-only access.
           </div>
+        ) : activeReservation ? (
+          <button
+            className="btn btn-danger btn-sm"
+            style={{ flex: 1 }}
+            onClick={onCancelReservation}
+          >
+            <Icon name="x" size={13} /> Cancel reservation
+          </button>
         ) : (
           <button
             className="btn btn-primary btn-sm"

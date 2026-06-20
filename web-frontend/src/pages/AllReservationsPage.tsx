@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { Icon } from '../lib/Icon';
 import { KPI } from '../lib/charts';
+import {
+  getReservationEffectiveStatus,
+  useReservationClock,
+  type ReservationStatus
+} from '../lib/reservations';
 
 type R = {
   reservationId: string;
@@ -9,7 +14,7 @@ type R = {
   userEmail?: string | null;
   stationId: string;
   providerId: string;
-  status: 'CONFIRMED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+  status: ReservationStatus;
   endTime?: string;
   chargeAmount?: number;
   currency?: string;
@@ -37,6 +42,7 @@ export default function AllReservationsPage() {
   const [statusFilter, setStatus] = useState('');
   const [providerFilter, setProvider] = useState('');
   const [userQuery, setUserQuery] = useState('');
+  const now = useReservationClock(rows);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -52,20 +58,21 @@ export default function AllReservationsPage() {
   const providers = useMemo(() => Array.from(new Set(rows.map(r => r.providerId))).sort(), [rows]);
 
   const filtered = useMemo(() => rows.filter(r => {
-    if (statusFilter   && r.status !== statusFilter) return false;
+    const effectiveStatus = getReservationEffectiveStatus(r, now);
+    if (statusFilter   && effectiveStatus !== statusFilter) return false;
     if (providerFilter && r.providerId !== providerFilter) return false;
     if (userQuery) {
       const q = userQuery.toLowerCase();
       if (!(r.userEmail || '').toLowerCase().includes(q) && !(r.userId || '').includes(q)) return false;
     }
     return true;
-  }), [rows, statusFilter, providerFilter, userQuery]);
+  }), [rows, statusFilter, providerFilter, userQuery, now]);
 
   const counts = useMemo(() => {
     const c = { CONFIRMED: 0, REJECTED: 0, EXPIRED: 0, CANCELLED: 0 } as Record<R['status'], number>;
-    for (const r of filtered) c[r.status]++;
+    for (const r of filtered) c[getReservationEffectiveStatus(r, now)]++;
     return c;
-  }, [filtered]);
+  }, [filtered, now]);
 
   const hasFilter = !!(statusFilter || providerFilter || userQuery);
 
@@ -141,7 +148,9 @@ export default function AllReservationsPage() {
                     {hasFilter ? 'No reservations match the current filters.' : 'No reservations yet.'}
                   </td></tr>
                 )}
-                {filtered.map(r => (
+                {filtered.map(r => {
+                  const effectiveStatus = getReservationEffectiveStatus(r, now);
+                  return (
                   <tr key={r.reservationId}>
                     <td>{r.createdAt ? new Date(r.createdAt).toLocaleString() : '—'}</td>
                     <td>
@@ -157,10 +166,11 @@ export default function AllReservationsPage() {
                         {r.providerId}
                       </span>
                     </td>
-                    <td><span className={`badge ${STATUS_BADGE[r.status]}`}>{r.status}</span></td>
+                    <td><span className={`badge ${STATUS_BADGE[effectiveStatus]}`}>{effectiveStatus}</span></td>
                     <td className="num">{r.chargeAmount != null ? `€${r.chargeAmount.toFixed(2)}` : '—'}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

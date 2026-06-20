@@ -36,6 +36,40 @@ exports.requireUser = (req, res, next) => {
   next();
 };
 
+function reservationEndDate(reservation) {
+  if (!reservation?.endTime) return null;
+  const end = reservation.endTime instanceof Date ? reservation.endTime : new Date(reservation.endTime);
+  return Number.isNaN(end.getTime()) ? null : end;
+}
+
+function isReservationLive(reservation, now = new Date()) {
+  const end = reservationEndDate(reservation);
+  return reservation?.status === 'CONFIRMED' && !!end && end > now;
+}
+
+async function expireEndedReservations(scopeFilter = {}, now = new Date()) {
+  await Reservation.updateMany(
+    {
+      ...scopeFilter,
+      status: 'CONFIRMED',
+      $or: [
+        { endTime: { $lte: now } },
+        { endTime: null },
+        { endTime: { $exists: false } }
+      ]
+    },
+    { $set: { status: 'EXPIRED' } }
+  );
+}
+
+async function expireReservationIfEnded(doc, now = new Date()) {
+  if (doc?.status === 'CONFIRMED' && !isReservationLive(doc, now)) {
+    doc.status = 'EXPIRED';
+    await doc.save();
+  }
+  return doc;
+}
+
 /** POST /api/reservations  body: { stationId, minutes? } */
 exports.create = async (req, res) => {
   const { stationId, minutes } = req.body || {};
@@ -121,6 +155,8 @@ exports.listMine = async (req, res) => {
   const filter = (wantsAll && isOperator) ? {} : { userId: req.user.id };
   const limit = Math.min(parseInt(req.query.limit, 10) || (wantsAll ? 200 : 50), 500);
 
+  await expireEndedReservations(filter);
+
   const docs = await Reservation.find(filter)
     .sort({ created_at: -1 })
     .limit(limit)
@@ -133,11 +169,45 @@ exports.listMine = async (req, res) => {
 
 /** GET /api/reservations/:id */
 exports.getOne = async (req, res) => {
-  const doc = await Reservation.findById(req.params.id).lean();
+  const doc = await Reservation.findById(req.params.id);
   if (!doc) return res.status(404).json({ error: 'NOT_FOUND' });
   if (doc.userId !== req.user.id && req.user.role !== 'operator') {
     return res.status(403).json({ error: 'FORBIDDEN' });
   }
+  await expireReservationIfEnded(doc);
+  res.json(toDTO(doc));
+};
+
+/** POST /api/reservations/:id/cancel */
+exports.cancel = async (req, res) => {
+  const doc = await Reservation.findById(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (doc.userId !== req.user.id) return res.status(403).json({ error: 'FORBIDDEN' });
+  if (doc.status !== 'CONFIRMED') {
+    return res.status(409).json({ error: 'NOT_ACTIVE', message: `Reservation is ${doc.status}.` });
+  }
+
+  if (!isReservationLive(doc)) {
+    doc.status = 'EXPIRED';
+    await doc.save();
+    return res.status(409).json({
+      error: 'RESERVATION_EXPIRED',
+      message: 'Reservation has already ended.',
+      reservation: toDTO(doc)
+    });
+  }
+
+  doc.status = 'CANCELLED';
+  await doc.save();
+
+  publish('reservation.cancelled', {
+    reservationId: doc._id.toString(),
+    userId: doc.userId,
+    stationId: doc.stationId,
+    providerId: doc.providerId,
+    ts: new Date().toISOString()
+  }).catch(e => log.warn(`publish reservation.cancelled failed: ${e.message}`));
+
   res.json(toDTO(doc));
 };
 

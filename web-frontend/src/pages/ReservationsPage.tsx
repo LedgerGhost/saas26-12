@@ -2,12 +2,18 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Icon } from '../lib/Icon';
+import {
+  getReservationEffectiveStatus,
+  isReservationLive,
+  useReservationClock,
+  type ReservationStatus
+} from '../lib/reservations';
 
 type R = {
   reservationId: string;
   stationId: string;
   providerId: string;
-  status: 'CONFIRMED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+  status: ReservationStatus;
   endTime?: string;
   chargeAmount?: number;
   currency?: string;
@@ -33,12 +39,38 @@ export default function ReservationsPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState<R[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const now = useReservationClock(rows);
 
   useEffect(() => {
     api.get('/reservations')
       .then(r => setRows(r.data?.reservations || []))
       .finally(() => setLoading(false));
   }, []);
+
+  async function cancelReservation(reservationId: string) {
+    setCancellingId(reservationId);
+    setActionError(null);
+    try {
+      const r = await api.post(`/reservations/${encodeURIComponent(reservationId)}/cancel`);
+      const updated = r.data;
+      setRows(current => current.map(row => (
+        row.reservationId === reservationId ? { ...row, status: updated.status } : row
+      )));
+    } catch (e: any) {
+      const expiredReservation = e.response?.data?.reservation;
+      if (expiredReservation?.reservationId) {
+        setRows(current => current.map(row => (
+          row.reservationId === expiredReservation.reservationId ? { ...row, ...expiredReservation } : row
+        )));
+      }
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+      setActionError(`Cancellation failed: ${msg}`);
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', padding: '32px 28px', flex: 1, overflow: 'auto', width: '100%' }}>
@@ -53,6 +85,7 @@ export default function ReservationsPage() {
       </div>
 
       {loading && <div className="card" style={{ padding: 18, color: 'var(--text-3)' }}>Loading…</div>}
+      {actionError && <div className="toast error">{actionError}</div>}
 
       {!loading && rows.length === 0 && (
         <div className="card" style={{ padding: 32, textAlign: 'center' }}>
@@ -70,7 +103,9 @@ export default function ReservationsPage() {
       {rows.length > 0 && (
         <div className="res-list">
           {rows.map(r => {
-            const badge = STATUS_BADGE[r.status];
+            const effectiveStatus = getReservationEffectiveStatus(r, now);
+            const badge = STATUS_BADGE[effectiveStatus];
+            const live = isReservationLive(r, now);
             const when = r.createdAt ? friendlyDate(new Date(r.createdAt)) : '—';
             const time = r.endTime
               ? `${formatTime(new Date(new Date(r.endTime).getTime() - 30 * 60_000))}–${formatTime(new Date(r.endTime))}`
@@ -97,7 +132,19 @@ export default function ReservationsPage() {
                 <div className="t-num" style={{ fontWeight: 500 }}>
                   {r.chargeAmount != null ? `€${r.chargeAmount.toFixed(2)}` : '—'}
                 </div>
-                <span className={`badge ${badge.cls}`}>{badge.label}</span>
+                <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+                  <span className={`badge ${badge.cls}`}>{badge.label}</span>
+                  {live && (
+                    <button
+                      className="btn btn-danger btn-sm"
+                      disabled={cancellingId === r.reservationId}
+                      onClick={() => cancelReservation(r.reservationId)}
+                    >
+                      <Icon name="x" size={12} />
+                      {cancellingId === r.reservationId ? 'Cancelling' : 'Cancel'}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}

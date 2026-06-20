@@ -12,7 +12,7 @@ const invoiceController = require('./controllers/invoiceController');
   await rmqConnect();
   await subscribe(
     'billing-service.events',
-    ['reservation.confirmed'],
+    ['reservation.confirmed', 'reservation.cancelled'],
     eventHandler
   );
 
@@ -28,4 +28,3 @@ const invoiceController = require('./controllers/invoiceController');
   console.error('[billing-service] fatal:', err); 
   process.exit(1); 
 });
-

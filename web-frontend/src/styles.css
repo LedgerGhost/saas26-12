@@ -369,8 +369,16 @@ input, select, textarea, button { font: inherit; }
 }
 
 /* ── Map floating chrome ─────────────────────────────────── */
+.map-ui-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  pointer-events: none;
+}
+
 .map-float {
   position: absolute;
+  pointer-events: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--r-3);
@@ -388,6 +396,27 @@ input, select, textarea, button { font: inherit; }
   height: 100%;
   font-size: 14px;
   color: var(--text);
+}
+.map-provider {
+  top: 68px; left: 16px;
+  height: 40px;
+  width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 12px;
+}
+.map-provider select {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
 }
 .map-filters {
   top: 16px; right: 16px;
@@ -423,6 +452,86 @@ input, select, textarea, button { font: inherit; }
 }
 .map-zoom button:last-child { border-bottom: 0; }
 .map-zoom button:hover { background: var(--bg-sunk); color: var(--text); }
+.map-status {
+  left: 16px;
+  bottom: 24px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.map-reservation-action {
+  right: 16px;
+  bottom: 24px;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 12px 14px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.map-reservation-action .t-small {
+  display: block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .map-search {
+    top: 12px;
+    left: 12px;
+    width: calc(100% - 24px) !important;
+  }
+
+  .map-provider {
+    top: 68px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+
+  .map-filters {
+    top: 120px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .map-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .map-filters .filter-chip {
+    flex: 0 0 auto;
+  }
+
+  .map-status {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    justify-content: space-between;
+  }
+
+  .map-wrap.has-reservation-action .map-status {
+    bottom: 88px;
+  }
+
+  .map-reservation-action {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+    justify-content: space-between;
+  }
+
+  .map-reservation-action .t-small {
+    max-width: 140px;
+  }
+}
 
 /* station detail card (popup on map) */
 .station-pop {
