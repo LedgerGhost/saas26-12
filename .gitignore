@@ -4,3 +4,16 @@ dist/
 *.log
 .DS_Store
 .vscode/
+
+# Windows shortcuts
+Desktop.ini
+thumbs.db
+
+# k6 test results
+*.txt
+*.json
+!packages/
+!architecture/
+
+# IDEs and editors
+.idea/
