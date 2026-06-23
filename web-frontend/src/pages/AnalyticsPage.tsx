@@ -13,13 +13,23 @@ type PerProvider = {
   events: { eventType: string; count: number }[];
 };
 type TimePoint = { day: string; buckets: { eventType: string; count: number }[] };
+type ProviderSeries = { providerId: string; days: TimePoint[] };
+type Revenue = {
+  total: number;
+  perProvider: Record<string, number>;
+  timeSeries: Record<string, number>;
+};
 
 type AnalyticsResp = {
   scope: 'global';
   totals: Totals;
   perProvider: PerProvider[];
   timeSeries: TimePoint[];
+  providerSeries: ProviderSeries[];
+  revenue: Revenue;
 };
+
+type Metric = 'RESERVATION_CONFIRMED' | 'SEARCH' | 'CLICK' | 'REVENUE';
 
 const RANGES: Record<string, number> = { '7d': 7, '30d': 30, 'MTD': 24 };
 
@@ -34,7 +44,7 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [metric, setMetric] = useState<'RESERVATION_CONFIRMED' | 'SEARCH' | 'CLICK'>('RESERVATION_CONFIRMED');
+  const [metric, setMetric] = useState<Metric>('RESERVATION_CONFIRMED');
   const [activeSet, setActiveSet] = useState<Set<string> | null>(null);
 
   async function load() {
@@ -54,52 +64,50 @@ export default function AnalyticsPage() {
 
   const providers = useMemo(() => data?.perProvider.map(p => p.providerId) || [], [data]);
 
-  // Build multi-series — one per active provider for the chosen metric, padded for missing days.
+  // Build multi-series — one REAL line per active provider for the chosen metric,
+  // padded for missing days. Uses the backend's per-provider daily series
+  // (providerSeries) rather than approximating from each provider's period share.
   const multiSeries = useMemo(() => {
-    if (!data) return [];
+    if (!data || metric === 'REVENUE') return [];
     const days = RANGES[range] || 30;
 
-    const byProviderDay = new Map<string, Map<string, number>>();
-    for (const p of data.perProvider) byProviderDay.set(p.providerId, new Map());
-
-    // The /api/analytics/global timeSeries is by-day-and-eventType across all providers.
-    // We approximate per-provider time series by attributing the daily total of the metric
-    // proportional to that provider's share of the period total.
-    const periodTotals = new Map<string, number>();
-    for (const p of data.perProvider) {
-      const ev = p.events.find(e => e.eventType === metric);
-      periodTotals.set(p.providerId, ev?.count || 0);
-    }
-    const periodSum = Array.from(periodTotals.values()).reduce((a, b) => a + b, 0);
-
-    const dayTotals = new Map<string, number>();
-    for (const pt of data.timeSeries) {
-      const b = pt.buckets.find(x => x.eventType === metric);
-      dayTotals.set(pt.day, b?.count || 0);
+    // providerId -> (dayKey -> count) for the selected event metric
+    const byProvider = new Map<string, Map<string, number>>();
+    for (const ps of data.providerSeries || []) {
+      const m = new Map<string, number>();
+      for (const pt of ps.days) {
+        const b = pt.buckets.find(x => x.eventType === metric);
+        m.set(pt.day, b?.count || 0);
+      }
+      byProvider.set(ps.providerId, m);
     }
 
     const out: { name: string; color: string; data: { date: Date; value: number }[] }[] = [];
     (data.perProvider || []).forEach((p, i) => {
       if (activeSet && !activeSet.has(p.providerId)) return;
-      const share = periodSum > 0 ? (periodTotals.get(p.providerId) || 0) / periodSum : 0;
+      const dayMap = byProvider.get(p.providerId) || new Map();
       const series: { date: Date; value: number }[] = [];
       for (let d = days - 1; d >= 0; d--) {
         const dt = new Date(); dt.setHours(0, 0, 0, 0); dt.setDate(dt.getDate() - d);
-        const dayTotal = dayTotals.get(dt.toISOString().slice(0, 10)) || 0;
-        series.push({ date: dt, value: Math.round(dayTotal * share) });
+        series.push({ date: dt, value: dayMap.get(dt.toISOString().slice(0, 10)) || 0 });
       }
       out.push({ name: p.providerId, color: colorFor(p.providerId, i), data: series });
     });
     return out;
   }, [data, metric, range, activeSet]);
 
+  // Total line — daily event totals, or daily revenue when the Revenue metric is selected.
   const totalSeries = useMemo(() => {
     if (!data) return [];
     const days = RANGES[range] || 30;
     const dayTotals = new Map<string, number>();
-    for (const pt of data.timeSeries) {
-      const b = pt.buckets.find(x => x.eventType === metric);
-      dayTotals.set(pt.day, b?.count || 0);
+    if (metric === 'REVENUE') {
+      for (const [day, amt] of Object.entries(data.revenue?.timeSeries || {})) dayTotals.set(day, amt);
+    } else {
+      for (const pt of data.timeSeries) {
+        const b = pt.buckets.find(x => x.eventType === metric);
+        dayTotals.set(pt.day, b?.count || 0);
+      }
     }
     const out: { date: Date; value: number }[] = [];
     for (let d = days - 1; d >= 0; d--) {
@@ -109,9 +117,16 @@ export default function AnalyticsPage() {
     return out;
   }, [data, metric, range]);
 
-  // Donut: share of total reservations per provider
+  // Donut: share per provider for the selected metric (revenue uses € share).
   const donutSlices = useMemo(() => {
     if (!data) return [];
+    if (metric === 'REVENUE') {
+      return data.perProvider.map((p, i) => ({
+        label: p.providerId,
+        value: +(data.revenue?.perProvider?.[p.providerId] || 0).toFixed(2),
+        color: colorFor(p.providerId, i)
+      })).filter(s => s.value > 0);
+    }
     return data.perProvider.map((p, i) => {
       const ev = p.events.find(e => e.eventType === metric);
       return { label: p.providerId, value: ev?.count || 0, color: colorFor(p.providerId, i) };
@@ -119,6 +134,9 @@ export default function AnalyticsPage() {
   }, [data, metric]);
 
   const totals = data?.totals;
+  const fmtY = (v: number) => metric === 'REVENUE'
+    ? `€${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+    : v.toLocaleString();
   const leaderboard = useMemo(() => {
     if (!data) return [];
     return data.perProvider.map((p, i) => {
@@ -158,9 +176,12 @@ export default function AnalyticsPage() {
         {err && <div className="card" style={{ padding: 14, color: 'var(--offline)' }}>{err}</div>}
 
         {/* KPI strip */}
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(6, 1fr)', gap: 14 }}>
           <KPI
-            label="Searches" value={(totals?.SEARCH || 0).toLocaleString()}
+            label="Revenue" value={`€${(data?.revenue?.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          />
+          <KPI
+            label="Search impressions" value={(totals?.SEARCH || 0).toLocaleString()}
             spark={<Sparkline data={spark(data, 'SEARCH', range)} w={160} h={26} color="var(--accent)" />}
           />
           <KPI
@@ -185,7 +206,8 @@ export default function AnalyticsPage() {
               </div>
               <div className="seg">
                 <button aria-pressed={metric === 'RESERVATION_CONFIRMED'} onClick={() => setMetric('RESERVATION_CONFIRMED')}>Reservations</button>
-                <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Searches</button>
+                <button aria-pressed={metric === 'REVENUE'} onClick={() => setMetric('REVENUE')}>Revenue</button>
+                <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Impressions</button>
                 <button aria-pressed={metric === 'CLICK'}  onClick={() => setMetric('CLICK')}>Clicks</button>
               </div>
             </div>
@@ -193,9 +215,9 @@ export default function AnalyticsPage() {
               {loading ? (
                 <div style={{ height: 300, display: 'grid', placeItems: 'center', color: 'var(--text-3)' }}>Loading…</div>
               ) : multiSeries.length > 0 ? (
-                <LineChart series={multiSeries} multi height={300} formatY={v => v.toLocaleString()} />
+                <LineChart series={multiSeries} multi height={300} formatY={fmtY} />
               ) : (
-                <LineChart series={{ data: totalSeries, color: 'var(--accent)' }} height={300} formatY={v => v.toLocaleString()} />
+                <LineChart series={{ data: totalSeries, color: 'var(--accent)' }} height={300} formatY={fmtY} />
               )}
               <div className="row" style={{ flexWrap: 'wrap', gap: 12, marginTop: 16 }}>
                 {data?.perProvider.map((p, i) => {
@@ -298,7 +320,8 @@ export default function AnalyticsPage() {
 
 function metricLabel(m: string): string {
   if (m === 'RESERVATION_CONFIRMED') return 'Reservations';
-  if (m === 'SEARCH') return 'Searches';
+  if (m === 'REVENUE') return 'Revenue';
+  if (m === 'SEARCH') return 'Search impressions';
   return 'Clicks';
 }
 

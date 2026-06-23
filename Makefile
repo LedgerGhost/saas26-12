@@ -1,4 +1,4 @@
-.PHONY: up down logs build rebuild ps seed reset test ci-build help
+.PHONY: up down logs build rebuild ps seed seed-analytics seed-billing seed-charts reset test ci-build help
 
 # Default target — show help
 help:
@@ -12,6 +12,9 @@ help:
 	@echo "  make build    Build all images"
 	@echo "  make rebuild  Force-rebuild with --no-cache"
 	@echo "  make seed     Run scripts/seed.js against the running stack"
+	@echo "  make seed-analytics  Fill analytics charts with demo log_entries (30 days)"
+	@echo "  make seed-billing    Create real UNPAID invoices to test Stripe payment"
+	@echo "  make seed-charts     Run both analytics + billing seeds"
 	@echo "  make test     Run unit tests in every service"
 	@echo "  make ci-build Validate docker-compose + build all images (used by CI)"
 
@@ -39,6 +42,23 @@ rebuild:
 seed:
 	@command -v node >/dev/null || { echo "node is required to run the seed script"; exit 1; }
 	API_BASE=$${API_BASE:-http://localhost/api} node scripts/seed.js
+
+# Seed analytics log_entries directly into mongo-analyticsdb (runs inside the
+# docker network using the analytics-service image, which already has mongoose).
+seed-analytics:
+	docker compose run --rm --no-deps -v "$(PWD)/scripts:/seed" \
+		-e NODE_PATH=/app/service/node_modules \
+		-e WIPE=$${WIPE:-0} -e DAYS=$${DAYS:-30} \
+		analytics-service node /seed/seed-analytics.js
+
+# Seed real UNPAID invoices into mongo-billingdb so the Stripe pay flow can be tested.
+seed-billing:
+	docker compose run --rm --no-deps -v "$(PWD)/scripts:/seed" \
+		-e NODE_PATH=/app/service/node_modules \
+		-e WIPE=$${WIPE:-0} -e PROVIDER=$${PROVIDER:-redPlug} \
+		billing-service node /seed/seed-billing.js
+
+seed-charts: seed-analytics seed-billing
 
 test:
 	@set -e; \

@@ -73,7 +73,7 @@ async function runAggregations(match, tz = 'UTC') {
     { $sort: { total: -1 } }
   ]);
 
-  // 3) time series — daily buckets
+  // 3) time series — daily buckets (across all providers in scope)
   const timeSeries = await LogEntry.aggregate([
     { $match: match },
     {
@@ -95,7 +95,64 @@ async function runAggregations(match, tz = 'UTC') {
     { $sort: { day: 1 } }
   ]);
 
-  return { totals, perProvider, timeSeries };
+  // 4) REAL per-provider daily series — grouped by providerId + day + eventType.
+  // The operator page uses this to draw true per-provider lines instead of
+  // approximating from each provider's period share.
+  const providerSeries = await LogEntry.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: {
+          providerId: '$providerId',
+          day:        { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: tz } },
+          eventType:  '$eventType'
+        },
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $group: {
+        _id: { providerId: '$_id.providerId', day: '$_id.day' },
+        buckets: { $push: { eventType: '$_id.eventType', count: '$count' } }
+      }
+    },
+    {
+      $group: {
+        _id: '$_id.providerId',
+        days: { $push: { day: '$_id.day', buckets: '$buckets' } }
+      }
+    },
+    { $project: { _id: 0, providerId: '$_id', days: 1 } }
+  ]);
+
+  // 5) revenue rollup — sum of settled payment amounts (metadata.amount on
+  // PAYMENT_COMPLETED events). Mirrors Stripe-settled revenue captured by the
+  // analytics ingest of `payment.completed`. We override any eventType filter
+  // from the caller so revenue is always computed from completed payments.
+  const revenueMatch = { ...match, eventType: 'PAYMENT_COMPLETED' };
+  const revenueAgg = await LogEntry.aggregate([
+    { $match: revenueMatch },
+    {
+      $group: {
+        _id: {
+          providerId: '$providerId',
+          day:        { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: tz } }
+        },
+        amount: { $sum: { $ifNull: ['$metadata.amount', 0] } }
+      }
+    }
+  ]);
+  const revenue = { total: 0, perProvider: {}, timeSeries: {} };
+  for (const row of revenueAgg) {
+    const amt = row.amount || 0;
+    revenue.total += amt;
+    const pid = row._id.providerId || 'unknown';
+    revenue.perProvider[pid] = (revenue.perProvider[pid] || 0) + amt;
+    revenue.timeSeries[row._id.day] = (revenue.timeSeries[row._id.day] || 0) + amt;
+  }
+  revenue.total = +revenue.total.toFixed(2);
+
+  return { totals, perProvider, timeSeries, providerSeries, revenue };
 }
 
 // GET /api/analytics  — provider's own

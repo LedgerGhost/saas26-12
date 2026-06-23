@@ -11,11 +11,17 @@ type Totals = {
   INVOICE_ISSUED?: number; PAYMENT_COMPLETED?: number;
 };
 type TimePoint = { day: string; buckets: { eventType: string; count: number }[] };
+type Revenue = {
+  total: number;
+  perProvider: Record<string, number>;
+  timeSeries: Record<string, number>;
+};
 type AnalyticsResp = {
   scope: 'own';
   providerId: string;
   totals: Totals;
   timeSeries: TimePoint[];
+  revenue: Revenue;
 };
 type Invoice = {
   _id: string;
@@ -159,7 +165,7 @@ export default function ProviderAnalyticsPage() {
         {/* KPI strip */}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
           <KPI
-            label="Searches"
+            label="Search impressions"
             value={(totals?.SEARCH || 0).toLocaleString()}
             spark={<Sparkline data={pad(data, 'SEARCH', range)} w={180} h={28} color="var(--accent)" />}
           />
@@ -176,9 +182,8 @@ export default function ProviderAnalyticsPage() {
             spark={<Sparkline data={pad(data, 'RESERVATION_CONFIRMED', range)} w={180} h={28} color="var(--accent)" />}
           />
           <KPI
-            label="Rejected"
-            value={(totals?.RESERVATION_REJECTED || 0).toLocaleString()}
-            spark={<Sparkline data={pad(data, 'RESERVATION_REJECTED', range)} w={180} h={28} color="var(--offline)" />}
+            label="Revenue"
+            value={`€${(data?.revenue?.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           />
         </div>
 
@@ -195,7 +200,7 @@ export default function ProviderAnalyticsPage() {
             </div>
             <div className="seg">
               <button aria-pressed={metric === 'RESERVATION_CONFIRMED'} onClick={() => setMetric('RESERVATION_CONFIRMED')}>Reservations</button>
-              <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Searches</button>
+              <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Impressions</button>
               <button aria-pressed={metric === 'CLICK'} onClick={() => setMetric('CLICK')}>Clicks</button>
             </div>
           </div>
@@ -264,7 +269,7 @@ export default function ProviderAnalyticsPage() {
 
 function metricLabel(m: string): string {
   if (m === 'RESERVATION_CONFIRMED') return 'Reservations';
-  if (m === 'SEARCH') return 'Searches';
+  if (m === 'SEARCH') return 'Search impressions';
   return 'Clicks';
 }
 
