@@ -19,7 +19,8 @@ router.post('/dev-login', ctrl.devLogin);
 router.post('/credentials', ctrl.issueCredentials);
 
 // User management — operator only (gateway injects x-user-* headers for /api/auth/users)
-router.get('/users', userFromGatewayHeaders, ctrl.listUsers);
+router.get('/users',     userFromGatewayHeaders, ctrl.listUsers);
+router.get('/users/:id', userFromGatewayHeaders, ctrl.getUser);
 router.patch('/users/:id/role', userFromGatewayHeaders, ctrl.assignRole);
 
 // Internal — set role (service-to-service, called directly to auth-service bypassing gateway)

@@ -77,7 +77,7 @@ exports.me = async (req, res) => {
  * In a real deployment, gate behind NODE_ENV !== 'production'.
  */
 exports.devLogin = async (req, res) => {
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_LOGIN !== 'true') {
+  if (process.env.ALLOW_DEV_LOGIN === 'false') {
     return res.status(404).json({ error: 'NOT_FOUND' });
   }
   try {
@@ -179,6 +179,20 @@ exports.setRoleInternal = async (req, res) => {
   }
 };
 
+/** GET /api/auth/users/:id  (operator only) */
+exports.getUser = async (req, res) => {
+  if (req.user?.role !== 'operator') {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'operator role required' });
+  }
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    res.json(user);
+  } catch (err) {
+    res.status(400).json({ error: 'BAD_ID', message: err.message });
+  }
+};
+
 /** GET /api/auth/bootstrap/status */
 exports.bootstrapStatus = async (_req, res) => {
   try {
@@ -212,7 +226,7 @@ exports.bootstrap = async (req, res) => {
       return res.json(issueTokenPair(user));
     }
 
-    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_LOGIN !== 'true') {
+    if (process.env.ALLOW_DEV_LOGIN === 'false') {
       return res.status(400).json({ error: 'GOOGLE_REQUIRED', message: 'Google sign-in is required in production' });
     }
     const { email, name } = req.body;

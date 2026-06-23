@@ -20,11 +20,13 @@ type Provider = {
   userId?: string;
 };
 
+type AssignedUser = { _id: string; name?: string; email: string; role: string };
+
 type UserResult = { _id: string; email: string; name?: string; role: string };
 
 function AssignUserRow({ provider, onAssigned }: {
   provider: Provider;
-  onAssigned: (providerId: string, userId: string) => void;
+  onAssigned: (providerId: string, userId: string, userDetail?: AssignedUser) => void;
 }) {
   const [open,  setOpen]  = useState(false);
   const [email, setEmail] = useState('');
@@ -49,7 +51,7 @@ function AssignUserRow({ provider, onAssigned }: {
     try {
       await api.patch(`/providers/${provider._id}/assign-user`, { userId: found._id });
       setSaved(true);
-      onAssigned(provider._id, found._id);
+      onAssigned(provider._id, found._id, found);
       setTimeout(() => { setSaved(false); setOpen(false); setEmail(''); setFound(undefined); }, 1500);
     } catch (e: any) { setErr(e.response?.data?.message || e.message); }
     finally { setBusy(false); }
@@ -137,11 +139,12 @@ function RegisterConnectorForm({ connector, onRegistered }: {
 }
 
 export default function ProviderManagementPage() {
-  const [connectors, setConnectors] = useState<Connector[]>([]);
-  const [providers,  setProviders]  = useState<Provider[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [err,        setErr]        = useState<string | null>(null);
-  const [registering, setRegistering] = useState<string | null>(null); // providerSystemId being registered
+  const [connectors,  setConnectors]  = useState<Connector[]>([]);
+  const [providers,   setProviders]   = useState<Provider[]>([]);
+  const [userMap,     setUserMap]     = useState<Record<string, AssignedUser>>({});
+  const [loading,     setLoading]     = useState(true);
+  const [err,         setErr]         = useState<string | null>(null);
+  const [registering, setRegistering] = useState<string | null>(null);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -150,8 +153,22 @@ export default function ProviderManagementPage() {
         api.get('/providers/discover'),
         api.get('/providers')
       ]);
+      const providerList: Provider[] = list.data.providers || [];
       setConnectors(disc.data.connectors || []);
-      setProviders(list.data.providers || []);
+      setProviders(providerList);
+
+      // Fetch user details for every assigned provider in parallel
+      const userIds = [...new Set(providerList.map(p => p.userId).filter(Boolean))] as string[];
+      if (userIds.length > 0) {
+        const results = await Promise.allSettled(
+          userIds.map(id => api.get<AssignedUser>(`/auth/users/${id}`))
+        );
+        const map: Record<string, AssignedUser> = {};
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') map[userIds[i]] = r.value.data;
+        });
+        setUserMap(map);
+      }
     } catch (e: any) {
       setErr(e.response?.data?.message || e.message);
     } finally { setLoading(false); }
@@ -164,8 +181,9 @@ export default function ProviderManagementPage() {
     load(); // reload to reflect new registration
   }
 
-  function handleAssigned(providerId: string, userId: string) {
+  function handleAssigned(providerId: string, userId: string, userDetail?: AssignedUser) {
     setProviders(ps => ps.map(p => p._id === providerId ? { ...p, userId } : p));
+    if (userDetail) setUserMap(m => ({ ...m, [userId]: userDetail }));
   }
 
   const unregistered = connectors.filter(c => !c.registered);
@@ -269,9 +287,16 @@ export default function ProviderManagementPage() {
                             <span className={p.status === 'active' ? 'badge-available' : 'badge'}>{p.status}</span>
                           </td>
                           <td style={{ padding: '12px 16px' }}>
-                            {p.userId
-                              ? <span className="t-small" style={{ color: 'var(--available)' }}><Icon name="check" size={12} /> Assigned</span>
-                              : <span className="t-small muted">Unassigned</span>}
+                            {p.userId && userMap[p.userId] ? (
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 500 }}>{userMap[p.userId].name || userMap[p.userId].email}</div>
+                                <div className="t-small muted">{userMap[p.userId].email}</div>
+                              </div>
+                            ) : p.userId ? (
+                              <span className="t-small muted">Loading…</span>
+                            ) : (
+                              <span className="t-small muted">Unassigned</span>
+                            )}
                           </td>
                           <td style={{ padding: '12px 16px' }}>
                             <AssignUserRow provider={p} onAssigned={handleAssigned} />
