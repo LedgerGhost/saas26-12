@@ -112,6 +112,123 @@ exports.issueCredentials = async (req, res) => {
   res.status(201).json({ clientId, clientSecret });
 };
 
+/** GET /api/auth/users?page=&limit=&search=&role= */
+exports.listUsers = async (req, res) => {
+  if (req.user?.role !== 'operator') {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'operator role required' });
+  }
+  try {
+    const page  = Math.max(1, parseInt(req.query.page  || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+    const filter = {};
+    if (req.query.search) {
+      const re = new RegExp(req.query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ email: re }, { name: re }];
+    }
+    if (req.query.role) filter.role = req.query.role;
+    const [users, total] = await Promise.all([
+      User.find(filter).sort({ created_at: -1 }).skip((page - 1) * limit).limit(limit),
+      User.countDocuments(filter)
+    ]);
+    res.json({ users, total, page, limit, pages: Math.ceil(total / limit) });
+  } catch (err) {
+    res.status(500).json({ error: 'LIST_FAILED', message: err.message });
+  }
+};
+
+/** PATCH /api/auth/users/:id/role   body: { role } */
+exports.assignRole = async (req, res) => {
+  if (req.user?.role !== 'operator') {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'operator role required' });
+  }
+  const { role } = req.body;
+  const VALID = ['ev_user', 'provider', 'operator'];
+  if (!VALID.includes(role)) {
+    return res.status(400).json({ error: 'INVALID_ROLE', message: `role must be one of: ${VALID.join(', ')}` });
+  }
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ error: 'SELF_DEMOTION', message: 'You cannot change your own role' });
+  }
+  try {
+    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+    if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    res.json(user);
+  } catch (err) {
+    res.status(400).json({ error: 'ASSIGN_FAILED', message: err.message });
+  }
+};
+
+/** POST /api/auth/internal/set-role   body: { userId, role }  (service-to-service) */
+exports.setRoleInternal = async (req, res) => {
+  const expected = process.env.INTERNAL_AUTH_TOKEN;
+  const got = req.headers['x-internal-token'];
+  if (!expected || got !== expected) {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'Internal endpoint' });
+  }
+  const { userId, role } = req.body;
+  const VALID = ['ev_user', 'provider', 'operator'];
+  if (!userId || !VALID.includes(role)) {
+    return res.status(400).json({ error: 'INVALID_INPUT', message: 'userId and valid role required' });
+  }
+  try {
+    const user = await User.findByIdAndUpdate(userId, { role }, { new: true });
+    if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    res.json({ ok: true, role: user.role });
+  } catch (err) {
+    res.status(400).json({ error: 'SET_ROLE_FAILED', message: err.message });
+  }
+};
+
+/** GET /api/auth/bootstrap/status */
+exports.bootstrapStatus = async (_req, res) => {
+  try {
+    const count = await User.countDocuments({ role: 'operator' });
+    res.json({ needed: count === 0 });
+  } catch (err) {
+    res.status(500).json({ error: 'STATUS_CHECK_FAILED', message: err.message });
+  }
+};
+
+/**
+ * POST /api/auth/bootstrap   body: { idToken } | { email, name } (dev only)
+ * Creates the first operator. Returns 409 if an operator already exists.
+ */
+exports.bootstrap = async (req, res) => {
+  try {
+    const existing = await User.findOne({ role: 'operator' });
+    if (existing) {
+      return res.status(409).json({ error: 'ALREADY_BOOTSTRAPPED', message: 'An operator already exists. Use normal sign-in.' });
+    }
+
+    if (req.body.idToken) {
+      if (!googleClient) return res.status(503).json({ error: 'GOOGLE_OAUTH_NOT_CONFIGURED' });
+      const ticket = await googleClient.verifyIdToken({ idToken: req.body.idToken, audience: process.env.GOOGLE_CLIENT_ID });
+      const payload = ticket.getPayload();
+      const user = await User.findOneAndUpdate(
+        { googleId: payload.sub },
+        { googleId: payload.sub, email: payload.email, name: payload.name, picture: payload.picture, role: 'operator', lastLogin: new Date() },
+        { new: true, upsert: true }
+      );
+      return res.json(issueTokenPair(user));
+    }
+
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_LOGIN !== 'true') {
+      return res.status(400).json({ error: 'GOOGLE_REQUIRED', message: 'Google sign-in is required in production' });
+    }
+    const { email, name } = req.body;
+    if (!email) return res.status(400).json({ error: 'EMAIL_REQUIRED' });
+    const user = await User.findOneAndUpdate(
+      { email: email.toLowerCase().trim() },
+      { email, name: name || email.split('@')[0], role: 'operator', lastLogin: new Date() },
+      { new: true, upsert: true }
+    );
+    return res.json(issueTokenPair(user));
+  } catch (err) {
+    console.error('[auth] bootstrap:', err.message);
+    res.status(500).json({ error: 'BOOTSTRAP_FAILED', message: err.message });
+  }
+};
+
 function issueTokenPair(user) {
   const claims = { sub: user._id.toString(), email: user.email, role: user.role };
   return {

@@ -19,6 +19,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 export default function LoginPage() {
   const googleEnabled = !!import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const devEnabled    = import.meta.env.VITE_DEV_LOGIN !== 'false';
   const [role, setRole] = useState<Role>('ev_user');
   const [email, setEmail] = useState<string>(ROLE_DEFAULTS.ev_user.email);
   const [name,  setName]  = useState<string>(ROLE_DEFAULTS.ev_user.name);
@@ -81,6 +82,7 @@ export default function LoginPage() {
             </div>
           )}
 
+          {devEnabled && <>
           <div className="row" style={{ gap: 12 }}>
             <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
             <span className="t-small muted">or use the demo</span>
@@ -113,6 +115,7 @@ export default function LoginPage() {
               {busy ? 'Signing in…' : <>Sign in <Icon name="arrow-right" size={14} /></>}
             </button>
           </form>
+          </>}
         </div>
         <div className="t-small muted">© 2026 saasPlug · Athens</div>
       </div>

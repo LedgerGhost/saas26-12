@@ -8,7 +8,7 @@ const providerSchema = new mongoose.Schema({
   contactEmail:        { type: String, required: true, unique: true, lowercase: true, trim: true,
                          match: [/\S+@\S+\.\S+/, 'Please use a valid email address'] },
   apiBaseUrl:          { type: String, required: true, trim: true },
-  apiKey:              { type: String, required: true },
+  apiKey:              { type: String },
   // The upstream provider-system id used inside stationId (e.g. "redPlug" in "redPlug:42").
   // Used to map a reservation back to its Provider record for pricing lookup.
   providerSystemId:    { type: String, index: true, trim: true },

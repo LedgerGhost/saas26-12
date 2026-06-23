@@ -21,6 +21,7 @@ services:
       context: ./web-frontend
       args:
         - VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-}
+        - VITE_DEV_LOGIN=${ALLOW_DEV_LOGIN:-true}
     container_name: saasplug-web
     environment:
       - PORT=3000
@@ -87,6 +88,7 @@ services:
       - MONGO_URI=mongodb://mongo-providerdb:27017/providers
       - JWT_SECRET=${JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:5001
+      - ORCHESTRATOR_URL=http://provider-orchestrator:5007
       - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
     depends_on: [mongo-providerdb, auth-service]
     networks: [saasplug-net]

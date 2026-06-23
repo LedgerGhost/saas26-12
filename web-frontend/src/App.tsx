@@ -1,14 +1,19 @@
 import { Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import MapPage from './pages/MapPage';
 import ReservationsPage from './pages/ReservationsPage';
 import AllReservationsPage from './pages/AllReservationsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import LoginPage from './pages/LoginPage';
+import FirstRunSetupPage from './pages/FirstRunSetupPage';
 import RegisterProviderPage from './pages/RegisterProviderPage';
 import ProviderAnalyticsPage from './pages/ProviderAnalyticsPage';
 import InvoicesPage from './pages/InvoicesPage';
 import LogExportPage from './pages/LogExportPage';
+import UserManagementPage from './pages/UserManagementPage';
+import ProviderManagementPage from './pages/ProviderManagementPage';
 import { useAuth } from './lib/auth';
+import { api } from './lib/api';
 import { Icon, type IconName } from './lib/Icon';
 import { Wordmark } from './lib/charts';
 
@@ -28,7 +33,9 @@ const NAV: Record<string, NavItem[]> = {
   operator: [
     { path: '/operator/global',       label: 'Global',       icon: 'globe' },
     { path: '/operator/reservations', label: 'Reservations', icon: 'history' },
-    { path: '/operator/map',          label: 'Map',          icon: 'map' }
+    { path: '/operator/map',          label: 'Map',          icon: 'map' },
+    { path: '/operator/providers',    label: 'Providers',    icon: 'tower' },
+    { path: '/operator/users',        label: 'Users',        icon: 'user' }
   ]
 };
 
@@ -46,9 +53,26 @@ export default function App() {
   const { user, logout, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [bootstrapNeeded, setBootstrapNeeded] = useState<boolean | null>(null);
 
-  if (loading) {
+  useEffect(() => {
+    if (loading) return;
+    if (user) { setBootstrapNeeded(false); return; }
+    api.get('/auth/bootstrap/status')
+      .then(r => setBootstrapNeeded(r.data.needed))
+      .catch(() => setBootstrapNeeded(false));
+  }, [loading, user]);
+
+  if (loading || (!user && bootstrapNeeded === null)) {
     return <div style={{ display: 'grid', placeItems: 'center', height: '100vh', color: 'var(--text-3)' }}>Loading…</div>;
+  }
+
+  if (!user && bootstrapNeeded) {
+    return (
+      <Routes>
+        <Route path="*" element={<FirstRunSetupPage />} />
+      </Routes>
+    );
   }
 
   if (!user) {
@@ -111,6 +135,8 @@ export default function App() {
           {role === 'operator' && <Route path="/operator/global"       element={<AnalyticsPage />} />}
           {role === 'operator' && <Route path="/operator/reservations" element={<AllReservationsPage />} />}
           {role === 'operator' && <Route path="/operator/map"          element={<MapPage />} />}
+          {role === 'operator' && <Route path="/operator/users"        element={<UserManagementPage />} />}
+          {role === 'operator' && <Route path="/operator/providers" element={<ProviderManagementPage />} />}
 
           <Route path="*" element={<Navigate to={home} replace />} />
         </Routes>
@@ -118,3 +144,5 @@ export default function App() {
     </div>
   );
 }
+
+

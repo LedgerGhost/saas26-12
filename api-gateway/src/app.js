@@ -7,6 +7,7 @@ const { verifyToken, logger } = require('@saasplug/shared-utils');
 const log = logger('api-gateway');
 
 const ROUTES = [
+  { prefix: '/api/auth/users',   target: () => process.env.AUTH_SERVICE_URL,         protected: true  }, // operator user-management — must precede /api/auth
   { prefix: '/api/auth',         target: () => process.env.AUTH_SERVICE_URL,         protected: false },
   { prefix: '/api/stations',     target: () => process.env.STATIONS_SERVICE_URL,     protected: false }, // search is public
   { prefix: '/api/reservations', target: () => process.env.RESERVATION_SERVICE_URL,  protected: true  },

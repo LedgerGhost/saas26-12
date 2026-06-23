@@ -16,12 +16,18 @@ exports.register = async (req, res) => {
   try {
     const {
       companyName, contactEmail, apiBaseUrl, apiKey, pricingPlan,
-      providerSystemId, ratePerReservation
+      providerSystemId, ratePerReservation, skipConnectivityCheck
     } = req.body || {};
-    if (!companyName || !contactEmail || !apiBaseUrl || !apiKey) {
+    if (!companyName || !contactEmail || !apiBaseUrl) {
       return res.status(400).json({
         error: 'MISSING_FIELDS',
-        message: 'companyName, contactEmail, apiBaseUrl and apiKey are required'
+        message: 'companyName, contactEmail and apiBaseUrl are required'
+      });
+    }
+    if (!skipConnectivityCheck && !apiKey) {
+      return res.status(400).json({
+        error: 'MISSING_FIELDS',
+        message: 'apiKey is required unless skipConnectivityCheck is true'
       });
     }
     if (pricingPlan && !Provider.PRICING_PLANS.includes(pricingPlan)) {
@@ -37,19 +43,21 @@ exports.register = async (req, res) => {
       return res.status(409).json({ error: 'PROVIDER_EXISTS', message: 'A provider with this email is already registered' });
     }
 
-    // 2) connectivity check
-    try {
-      const probeUrl = apiBaseUrl.replace(/\/+$/, '') + '/points';
-      await axios.get(probeUrl, {
-        timeout: 10_000,
-        headers: apiKey ? { 'x-api-key': apiKey } : {},
-        validateStatus: s => s < 500
-      });
-    } catch (err) {
-      return res.status(502).json({
-        error: 'API_UNREACHABLE',
-        message: `Could not reach provider API at ${apiBaseUrl}: ${err.message}`
-      });
+    // 2) connectivity check (skipped for connector-discovered registrations)
+    if (!skipConnectivityCheck) {
+      try {
+        const probeUrl = apiBaseUrl.replace(/\/+$/, '') + '/points';
+        await axios.get(probeUrl, {
+          timeout: 10_000,
+          headers: apiKey ? { 'x-api-key': apiKey } : {},
+          validateStatus: s => s < 500
+        });
+      } catch (err) {
+        return res.status(502).json({
+          error: 'API_UNREACHABLE',
+          message: `Could not reach provider API at ${apiBaseUrl}: ${err.message}`
+        });
+      }
     }
 
     // 3) persist (without credentials yet)
@@ -99,6 +107,67 @@ exports.register = async (req, res) => {
   } catch (err) {
     console.error('[provider-service] register:', err);
     res.status(500).json({ error: 'REGISTRATION_FAILED', message: err.message });
+  }
+};
+
+/**
+ * GET /api/providers/discover
+ * Calls the orchestrator for all configured connectors, then cross-references
+ * the Provider collection so the UI knows which are already registered.
+ */
+exports.discover = async (req, res) => {
+  try {
+    const orchUrl = (process.env.ORCHESTRATOR_URL || 'http://provider-orchestrator:5007') + '/connectors';
+    const r = await axios.get(orchUrl, { timeout: 8_000 });
+    const connectors = r.data.connectors || [];
+
+    const registeredIds = await Provider.distinct('providerSystemId');
+    const registered = new Set(registeredIds.filter(Boolean));
+
+    res.json({
+      connectors: connectors.map(c => ({ ...c, registered: registered.has(c.providerSystemId) }))
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'DISCOVER_FAILED', message: err.message });
+  }
+};
+
+/** GET /api/providers — list all (safe fields only, no API keys) */
+exports.list = async (req, res) => {
+  try {
+    const providers = await Provider.find({})
+      .select('-apiKey -clientSecretHash')
+      .sort({ companyName: 1 });
+    res.json({ providers });
+  } catch (err) {
+    res.status(500).json({ error: 'LIST_FAILED', message: err.message });
+  }
+};
+
+/** PATCH /api/providers/:providerId/assign-user   body: { userId }  (operator only) */
+exports.assignUser = async (req, res) => {
+  if (req.user?.role !== 'operator') {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'operator role required' });
+  }
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'USER_ID_REQUIRED' });
+  try {
+    const provider = await Provider.findByIdAndUpdate(
+      req.params.providerId, { userId }, { new: true }
+    );
+    if (!provider) return res.status(404).json({ error: 'NOT_FOUND' });
+    try {
+      const url = (process.env.AUTH_SERVICE_URL || 'http://auth-service:5001') + '/api/auth/internal/set-role';
+      await axios.post(url, { userId, role: 'provider' }, {
+        timeout: 5_000,
+        headers: { 'x-internal-token': process.env.INTERNAL_AUTH_TOKEN || '' }
+      });
+    } catch (e) {
+      console.warn('[provider-service] assign-user role grant non-fatal:', e.message);
+    }
+    res.json(provider);
+  } catch (err) {
+    res.status(400).json({ error: 'ASSIGN_FAILED', message: err.message });
   }
 };
 

@@ -74,6 +74,33 @@ module.exports = function buildApp() {
   app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'provider-orchestrator', adapters: Object.keys(ADAPTERS) }));
 
   /**
+   * GET /connectors
+   * Pings each adapter's /health and reports reachability + upstream API base URL.
+   * Used by the provider-registration service to discover connectors for registration.
+   */
+  app.get('/connectors', async (_req, res) => {
+    const entries = Object.entries(ADAPTERS);
+    const results = await Promise.allSettled(
+      entries.map(async ([id, urlFn]) => {
+        const url = urlFn();
+        if (!url) throw new Error('adapter URL not configured');
+        const r = await axios.get(`${url}/health`, { timeout: 5_000 });
+        return {
+          providerSystemId: id,
+          apiBaseUrl: r.data.base || null,
+          reachable: true
+        };
+      })
+    );
+    const connectors = results.map((r, i) => {
+      const id = entries[i][0];
+      if (r.status === 'fulfilled') return r.value;
+      return { providerSystemId: id, apiBaseUrl: null, reachable: false, error: r.reason?.message };
+    });
+    res.json({ connectors });
+  });
+
+  /**
    * GET /stations[?status=...]
    * Fans out to all adapters in parallel. Cached 30s.
    */

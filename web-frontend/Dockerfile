@@ -7,6 +7,8 @@ COPY . ./
 # Vite inlines VITE_* envs at build time. Pass via --build-arg or docker-compose `args`.
 ARG VITE_GOOGLE_CLIENT_ID=""
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+ARG VITE_DEV_LOGIN="true"
+ENV VITE_DEV_LOGIN=$VITE_DEV_LOGIN
 RUN npm run build
 
 FROM node:20-alpine AS serve
