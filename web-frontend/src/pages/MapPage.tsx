@@ -6,20 +6,26 @@ import { useAuth } from '../lib/auth';
 import { Icon } from '../lib/Icon';
 import { StatusBadge } from '../lib/charts';
 import {
+  STATION_STATUSES,
+  STATION_STATUS_COLOR,
+  STATION_STATUS_LABEL,
+  normalizeStationStatus,
+  type StationStatus
+} from '../lib/stationStatus';
+import {
   isReservationLive,
   useReservationClock,
   type ReservationStatus,
   type TimedReservation
 } from '../lib/reservations';
 
-type ApiStatus = 'AVAILABLE' | 'OCCUPIED' | 'OUT_OF_SERVICE' | 'UNKNOWN';
 type Station = {
   stationId: string;
   providerId: string;
   name?: string;
   latitude: number;
   longitude: number;
-  status: ApiStatus;
+  status: StationStatus;
   pricePerKwh?: number;
   capacityKw?: number;
   lastUpdatedAt?: string;
@@ -38,13 +44,12 @@ type ReservationActionTarget = {
   station?: Station;
 };
 
-// Map backend ALL_CAPS → design's lowercase tokens used in CSS .badge-* classes
-const API_TO_TOKEN: Record<ApiStatus, 'available' | 'occupied' | 'offline' | 'unknown'> = {
-  AVAILABLE: 'available', OCCUPIED: 'occupied',
-  OUT_OF_SERVICE: 'offline', UNKNOWN: 'unknown'
-};
-const TOKEN_COLOR: Record<string, string> = {
-  available: '#16a34a', occupied: '#f59e0b', offline: '#dc2626', unknown: '#71717a'
+const DEFAULT_FILTERS: Record<StationStatus, boolean> = {
+  available: true,
+  charging: true,
+  reserved: true,
+  malfunction: false,
+  offline: false
 };
 const STATION_ICONS = createStationIcons(false);
 const FOCUSED_STATION_ICONS = createStationIcons(true);
@@ -70,9 +75,7 @@ export default function MapPage() {
   const [activeReservations, setActiveReservations] = useState<Record<string, ActiveReservation>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [filters, setFilters] = useState({
-    available: true, occupied: true, offline: false, unknown: false
-  });
+  const [filters, setFilters] = useState<Record<StationStatus, boolean>>(DEFAULT_FILTERS);
   const [nameQuery, setNameQuery] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
   const [providerId, setProviderId] = useState('');
@@ -133,7 +136,7 @@ export default function MapPage() {
       if (appliedQuery) params.q = appliedQuery;
       if (providerId) params.providerId = providerId;
       const r = await api.get('/stations', { params });
-      const nextStations = r.data?.stations || [];
+      const nextStations = (r.data?.stations || []).map(normalizeStation);
       setStations(nextStations);
       setFitStations(nextStations);
       setLastSync(new Date());
@@ -163,8 +166,8 @@ export default function MapPage() {
   }
   useEffect(() => { fetchActiveReservations(); /* eslint-disable-next-line */ }, [user?._id, readOnly]);
 
-  // Apply status filters client-side using the design's tokens.
-  const visible = useMemo(() => stations.filter(s => filters[API_TO_TOKEN[s.status]]), [stations, filters]);
+  // Apply status filters client-side using the provider API status vocabulary.
+  const visible = useMemo(() => stations.filter(s => filters[s.status]), [stations, filters]);
   const displayedStations = useMemo(() => {
     if (!focusTarget?.station) return visible;
     if (visible.some(station => station.stationId === focusTarget.station.stationId)) return visible;
@@ -187,7 +190,7 @@ export default function MapPage() {
     if (knownStation) return knownStation;
 
     const r = await api.get(`/stations/${encodeURIComponent(target.stationId)}`);
-    return r.data;
+    return normalizeStation(r.data);
   }
 
   async function showReservedStation() {
@@ -286,7 +289,6 @@ export default function MapPage() {
           markerRefs={markerRefs}
         />
         {displayedStations.map(st => {
-          const token = API_TO_TOKEN[st.status];
           const focused = focusedReservationStationId === st.stationId;
           const activeReservation = liveActiveReservations[st.stationId];
           return (
@@ -294,7 +296,7 @@ export default function MapPage() {
               key={st.stationId}
               ref={node => { markerRefs.current[st.stationId] = node; }}
               position={[st.latitude, st.longitude]}
-              icon={focused ? FOCUSED_STATION_ICONS[token] : STATION_ICONS[token]}
+              icon={focused ? FOCUSED_STATION_ICONS[st.status] : STATION_ICONS[st.status]}
               title={st.stationId}
               zIndexOffset={focused ? 1000 : 0}
               riseOnHover
@@ -357,15 +359,15 @@ export default function MapPage() {
         </div>
 
         <div className="map-float map-filters">
-          {(['available', 'occupied', 'offline', 'unknown'] as const).map(f => (
+          {STATION_STATUSES.map(f => (
             <button
               key={f}
               className="filter-chip"
               aria-pressed={filters[f]}
               onClick={() => toggleStatusFilter(f)}
             >
-              <span className="dot" style={{ background: TOKEN_COLOR[f] }} />
-              {f === 'offline' ? 'Offline' : f.charAt(0).toUpperCase() + f.slice(1)}
+              <span className="dot" style={{ background: STATION_STATUS_COLOR[f] }} />
+              {STATION_STATUS_LABEL[f]}
             </button>
           ))}
         </div>
@@ -432,18 +434,22 @@ function ago(d: Date): string {
   return d.toLocaleTimeString();
 }
 
-function createStationIcons(focused: boolean): Record<'available' | 'occupied' | 'offline' | 'unknown', L.DivIcon> {
-  return (['available', 'occupied', 'offline', 'unknown'] as const).reduce((icons, token) => {
+function normalizeStation(station: any): Station {
+  return { ...station, status: normalizeStationStatus(station?.status) };
+}
+
+function createStationIcons(focused: boolean): Record<StationStatus, L.DivIcon> {
+  return STATION_STATUSES.reduce((icons, token) => {
     const size = focused ? 22 : 16;
     icons[token] = L.divIcon({
       className: `station-dot-marker station-dot-marker-${token}${focused ? ' station-dot-marker-focused' : ''}`,
-      html: `<span class="station-dot-marker-dot" style="background:${TOKEN_COLOR[token]}"></span>`,
+      html: `<span class="station-dot-marker-dot" style="background:${STATION_STATUS_COLOR[token]}"></span>`,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
       popupAnchor: [0, -Math.ceil(size / 2)]
     });
     return icons;
-  }, {} as Record<'available' | 'occupied' | 'offline' | 'unknown', L.DivIcon>);
+  }, {} as Record<StationStatus, L.DivIcon>);
 }
 
 function FitToStations({ stations, recenterKey }: { stations: Station[]; recenterKey: number }) {
@@ -550,7 +556,6 @@ function StationPopupContent({ station, readOnly, activeReservation, onReserve, 
   onReserve: () => void;
   onCancelReservation: () => void;
 }) {
-  const token = API_TO_TOKEN[station.status];
   return (
     <div style={{ width: 280 }}>
       <div style={{ padding: '12px 14px 8px' }}>
@@ -559,7 +564,7 @@ function StationPopupContent({ station, readOnly, activeReservation, onReserve, 
       </div>
       <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
-          <StatusBadge status={token} />
+          <StatusBadge status={station.status} />
           <span className="t-small muted">{station.providerId}</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -584,7 +589,7 @@ function StationPopupContent({ station, readOnly, activeReservation, onReserve, 
           <button
             className="btn btn-primary btn-sm"
             style={{ flex: 1 }}
-            disabled={station.status !== 'AVAILABLE'}
+            disabled={station.status !== 'available'}
             onClick={onReserve}
           >
             <Icon name="bolt" size={13} /> Reserve
