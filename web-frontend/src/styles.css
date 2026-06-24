@@ -519,6 +519,35 @@ input, select, textarea, button { font: inherit; }
   white-space: nowrap;
 }
 
+.provider-map-header {
+  top: 16px;
+  left: 16px;
+  width: min(420px, calc(100% - 32px));
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.provider-map-search {
+  top: 112px;
+  left: 16px;
+}
+.provider-map-filters {
+  top: 16px;
+  right: 16px;
+  max-width: min(720px, calc(100% - 480px));
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.provider-map-filters .filter-chip {
+  gap: 7px;
+}
+.provider-map-status {
+  left: 16px;
+  bottom: 24px;
+}
+
 @media (max-width: 720px) {
   .map-search {
     top: 12px;
@@ -572,6 +601,38 @@ input, select, textarea, button { font: inherit; }
 
   .map-reservation-action .t-small {
     max-width: 140px;
+  }
+
+  .provider-map-header {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+
+  .provider-map-search {
+    top: 104px;
+  }
+
+  .provider-map-filters {
+    top: 156px;
+    left: 12px;
+    right: 12px;
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .provider-map-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .provider-map-status {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
   }
 }
 

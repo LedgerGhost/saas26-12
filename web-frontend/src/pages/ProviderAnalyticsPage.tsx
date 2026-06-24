@@ -44,6 +44,8 @@ export default function ProviderAnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [metric, setMetric] = useState<'RESERVATION_CONFIRMED' | 'SEARCH' | 'CLICK'>('RESERVATION_CONFIRMED');
+  const [invoiceModal, setInvoiceModal] = useState(false);
+  const [invoiceInfo, setInvoiceInfo] = useState<string | null>(null);
 
   // Resolve the calling user's provider for the header
   useEffect(() => {
@@ -153,6 +155,9 @@ export default function ProviderAnalyticsPage() {
             <button className="btn btn-secondary" onClick={() => navigate('/provider/logs')}>
               <Icon name="download" size={14} /> Export
             </button>
+            <button className="btn btn-primary" onClick={() => { setInvoiceInfo(null); setInvoiceModal(true); }}>
+              <Icon name="doc" size={14} /> Create invoice
+            </button>
           </div>
         </div>
 
@@ -161,6 +166,7 @@ export default function ProviderAnalyticsPage() {
             {err}
           </div>
         )}
+        {invoiceInfo && <div className="card" style={{ padding: 14, color: 'var(--available)' }}>{invoiceInfo}</div>}
 
         {/* KPI strip */}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
@@ -261,6 +267,100 @@ export default function ProviderAnalyticsPage() {
               )}
             </div>
           </div>
+        </div>
+      </div>
+
+      {invoiceModal && (
+        <SelfInvoiceModal
+          onClose={() => setInvoiceModal(false)}
+          onIssued={msg => { setInvoiceModal(false); setInvoiceInfo(msg); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Provider: create an invoice for your own outstanding reservation fees ─── */
+function SelfInvoiceModal({ onClose, onIssued }: { onClose: () => void; onIssued: (msg: string) => void }) {
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [outstanding, setOutstanding] = useState(0);
+  const [count, setCount] = useState(0);
+  const [currency, setCurrency] = useState('EUR');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get('/invoices/billable');
+        const own = (r.data?.providers || [])[0];
+        setOutstanding(own?.total || 0);
+        setCount(own?.count || 0);
+        setCurrency(own?.currency || 'EUR');
+      } catch (e: any) {
+        setErr(e.response?.data?.message || e.message);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+
+  async function issue() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.post('/invoices/create', {});
+      if (r.data?.empty) {
+        setErr('You have no outstanding reservations to invoice yet.');
+        setBusy(false);
+        return;
+      }
+      const amt = r.data?.invoice?.totalAmount ?? outstanding;
+      onIssued(`Invoice issued — €${Number(amt).toFixed(2)}. Find it on your Invoices page.`);
+    } catch (e: any) {
+      setErr(e.response?.data?.message || e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-scrim" onClick={onClose} style={{ pointerEvents: 'auto' }}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 'min(420px, calc(100% - 32px))' }}>
+        <div style={{ padding: '20px 24px 4px' }}>
+          <div className="t-h1">Create invoice</div>
+          <div className="t-small muted" style={{ marginTop: 2 }}>
+            Bill your outstanding reservation fees in a single invoice.
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {err && <div className="card" style={{ padding: 12, color: 'var(--offline)' }}>{err}</div>}
+
+          {loading ? (
+            <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-3)' }}>Calculating total…</div>
+          ) : (
+            <>
+              <div style={{ background: 'var(--bg-sunk)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <span className="t-small muted">Reservations to bill</span>
+                  <span className="t-small t-num" style={{ color: 'var(--text)' }}>{count}</span>
+                </div>
+                <div style={{ height: 1, background: 'var(--border)' }} />
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <strong>Invoice total</strong>
+                  <strong className="t-num" style={{ fontSize: 16 }}>€{outstanding.toFixed(2)} {currency}</strong>
+                </div>
+              </div>
+              <div className="t-small muted" style={{ display: 'flex', gap: 8 }}>
+                <Icon name="info" size={14} />
+                <span>The total is the sum of every reservation fee not yet included in an invoice.</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: '12px 16px 16px', display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid var(--border)' }}>
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-primary" onClick={issue} disabled={busy || loading || outstanding <= 0}>
+            <Icon name="doc" size={14} /> {busy ? 'Issuing…' : `Issue invoice €${outstanding.toFixed(2)}`}
+          </button>
         </div>
       </div>
     </div>

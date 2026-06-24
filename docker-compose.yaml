@@ -106,6 +106,8 @@ services:
       - RABBITMQ_URL=${RABBITMQ_URL}
       - JWT_SECRET=${JWT_SECRET}
       - STATIONS_CACHE_TTL_SEC=${STATIONS_CACHE_TTL_SEC:-300}
+      - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
     depends_on: [mongo-stationdb, rabbitmq, provider-orchestrator]
     networks: [saasplug-net]
 
@@ -136,6 +138,7 @@ services:
       - RABBITMQ_URL=${RABBITMQ_URL}
       - JWT_SECRET=${JWT_SECRET}
       - PROVIDER_SERVICE_URL=http://provider-service:5002
+      - RESERVATION_SERVICE_URL=http://reservation-service:5004
       - INTERNAL_AUTH_TOKEN=${INTERNAL_AUTH_TOKEN}
     depends_on: [mongo-analyticsdb, rabbitmq]
     networks: [saasplug-net]

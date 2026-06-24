@@ -51,3 +51,19 @@ test('keeps provider-filtered station searches as one log entry', async () => {
   assert.strictEqual(created[0].providerId, 'redPlug');
   assert.strictEqual(created[0].eventType, 'SEARCH');
 });
+
+test('logs cancelled reservations for export reconciliation', async () => {
+  created.length = 0;
+
+  await eventHandler('reservation.cancelled', {
+    reservationId: 'res-1',
+    userId: 'user-1',
+    providerId: 'redPlug',
+    stationId: 'redPlug:1',
+    ts: '2026-05-24T10:00:00.000Z'
+  });
+
+  assert.strictEqual(created.length, 1);
+  assert.strictEqual(created[0].eventType, 'RESERVATION_CANCELLED');
+  assert.strictEqual(created[0].metadata.reservationId, 'res-1');
+});

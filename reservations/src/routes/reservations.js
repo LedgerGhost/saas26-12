@@ -8,6 +8,9 @@ router.post('/', ctrl.requireUser, ctrl.create);
 // list own reservations
 router.get('/', ctrl.requireUser, ctrl.listMine);
 
+// internal status lookup for analytics export reconciliation
+router.post('/internal/statuses', ctrl.lookupStatuses);
+
 // cancel own active reservation
 router.post('/:id/cancel', ctrl.requireUser, ctrl.cancel);
 

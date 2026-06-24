@@ -40,12 +40,32 @@ const invoiceSchema = new mongoose.Schema({
 
 const Invoice = mongoose.model('Invoice', invoiceSchema);
 
+// Charges mirror billing/src/models/Charge.js — these are the per-reservation
+// fees the "Create invoice" flow sums up. We seed a handful that are NOT yet
+// invoiced so the operator/provider has a real outstanding balance to bill.
+const chargeSchema = new mongoose.Schema({
+  providerId:    { type: String, required: true, index: true },
+  reservationId: { type: String, required: true, unique: true },
+  stationId:     { type: String },
+  endTime:       { type: Date },
+  amount:        { type: Number, required: true },
+  currency:      { type: String, default: 'EUR' },
+  invoiceId:     { type: String, default: null },
+  invoicedAt:    { type: Date, default: null }
+}, { collection: 'charges', timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
+
+const Charge = mongoose.model('Charge', chargeSchema);
+
 // A few real UNPAID invoices to test Stripe payment against. All ISSUED, none PAID.
 const ROWS = [
   { period: '2026-03', amount: 1390.10 },
   { period: '2026-04', amount: 1102.30 },
   { period: '2026-05', amount: 1284.50 }
 ];
+
+// Un-invoiced reservation fees to bill via the "Create invoice" button.
+const CHARGE_RATE = 0.50;
+const CHARGE_COUNT = 12;
 
 async function main() {
   console.log('[seed-billing] connecting to', MONGO_URI);
@@ -78,8 +98,31 @@ async function main() {
     console.log(`   ✓ ${row.period}  €${row.amount.toFixed(2)}  ISSUED (unpaid)  (${invoice._id})`);
   }
 
+  // Seed un-invoiced charges so the operator/provider "Create invoice" flow has
+  // a real outstanding balance. Idempotent: the seeded reservationIds are
+  // deleted and re-inserted on every run.
+  const chargeIds = Array.from({ length: CHARGE_COUNT }, (_, i) => `seed-charge-${PROVIDER}-${i}`);
+  await Charge.deleteMany({ reservationId: { $in: chargeIds } });
+  const now = new Date();
+  const chargeRows = chargeIds.map((reservationId, i) => {
+    const ts = new Date(now.getFullYear(), now.getMonth(), Math.max(1, now.getDate() - (i % 5)), 10, 0, 0);
+    return {
+      providerId: PROVIDER,
+      reservationId,
+      stationId: `${PROVIDER}:${100 + i}`,
+      endTime: ts,
+      amount: CHARGE_RATE,
+      currency: 'EUR',
+      invoiceId: null,
+      invoicedAt: null
+    };
+  });
+  await Charge.insertMany(chargeRows);
+  console.log(`   ✓ seeded ${chargeRows.length} un-invoiced charges (€${(chargeRows.length * CHARGE_RATE).toFixed(2)} outstanding for ${PROVIDER})`);
+
   await mongoose.disconnect();
-  console.log('[seed-billing] done. Pay one from the Invoices page to test the Stripe flow.');
+  console.log('[seed-billing] done. Pay one from the Invoices page to test the Stripe flow,');
+  console.log('               or hit "Create invoice" to bill the outstanding charges.');
 }
 
 main().catch(err => { console.error('[seed-billing] failed:', err); process.exit(1); });

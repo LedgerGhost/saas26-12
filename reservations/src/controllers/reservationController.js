@@ -31,6 +31,25 @@ async function fetchProviderPricing(providerSystemId) {
   }
 }
 
+async function fetchProviderForUser(userId) {
+  if (!userId || !PROVIDER_BASE()) return null;
+  try {
+    const r = await axios.get(
+      `${PROVIDER_BASE()}/api/providers/by-user/${encodeURIComponent(userId)}`,
+      {
+        timeout: 4_000,
+        headers: { 'x-internal-token': process.env.INTERNAL_AUTH_TOKEN || '' },
+        validateStatus: s => s < 500
+      }
+    );
+    if (r.status !== 200) return null;
+    return r.data;
+  } catch (err) {
+    log.warn(`provider lookup failed for user ${userId}: ${err.message}`);
+    return null;
+  }
+}
+
 exports.requireUser = (req, res, next) => {
   if (!req.user?.id) return res.status(401).json({ error: 'UNAUTHENTICATED' });
   next();
@@ -149,10 +168,33 @@ exports.create = async (req, res) => {
  * Operators may pass ?scope=all to see every user's reservations (with userEmail).
  */
 exports.listMine = async (req, res) => {
-  const wantsAll = req.query.scope === 'all';
+  const scope = req.query.scope;
+  const wantsAll = scope === 'all';
+  const wantsProviderScope = scope === 'provider';
   const isOperator = req.user.role === 'operator';
+  const isProvider = req.user.role === 'provider';
 
-  const filter = (wantsAll && isOperator) ? {} : { userId: req.user.id };
+  let filter = { userId: req.user.id };
+  let responseScope = 'own';
+  let provider = null;
+
+  if (wantsAll) {
+    if (!isOperator) return res.status(403).json({ error: 'FORBIDDEN', message: 'operator role required' });
+    filter = {};
+    responseScope = 'all';
+  } else if (wantsProviderScope) {
+    if (!isProvider) return res.status(403).json({ error: 'FORBIDDEN', message: 'provider role required' });
+    provider = await fetchProviderForUser(req.user.id);
+    if (!provider?.providerSystemId) {
+      return res.status(404).json({
+        error: 'PROVIDER_NOT_FOUND',
+        message: 'No provider record is linked to this user.'
+      });
+    }
+    filter = { providerId: provider.providerSystemId };
+    responseScope = 'provider';
+  }
+
   const limit = Math.min(parseInt(req.query.limit, 10) || (wantsAll ? 200 : 50), 500);
 
   await expireEndedReservations(filter);
@@ -162,7 +204,12 @@ exports.listMine = async (req, res) => {
     .limit(limit)
     .lean();
   res.json({
-    scope: wantsAll && isOperator ? 'all' : 'own',
+    scope: responseScope,
+    provider: provider ? {
+      providerSystemId: provider.providerSystemId,
+      companyName: provider.companyName,
+      ratePerReservation: provider.ratePerReservation
+    } : undefined,
     reservations: docs.map(toDTO)
   });
 };
@@ -209,6 +256,33 @@ exports.cancel = async (req, res) => {
   }).catch(e => log.warn(`publish reservation.cancelled failed: ${e.message}`));
 
   res.json(toDTO(doc));
+};
+
+/** POST /api/reservations/internal/statuses  body: { reservationIds: string[] } */
+exports.lookupStatuses = async (req, res) => {
+  const expected = process.env.INTERNAL_AUTH_TOKEN;
+  const got = req.headers['x-internal-token'];
+  if (!expected || got !== expected) {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'Internal endpoint' });
+  }
+
+  const reservationIds = Array.isArray(req.body?.reservationIds)
+    ? req.body.reservationIds.filter(Boolean).slice(0, 1000)
+    : [];
+  if (!reservationIds.length) return res.json({ reservations: [] });
+
+  await expireEndedReservations({ _id: { $in: reservationIds } });
+
+  const docs = await Reservation.find({ _id: { $in: reservationIds } })
+    .select('status endTime')
+    .lean();
+  res.json({
+    reservations: docs.map(doc => ({
+      reservationId: doc._id.toString(),
+      status: doc.status,
+      endTime: doc.endTime
+    }))
+  });
 };
 
 function toDTO(d) {

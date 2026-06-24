@@ -5,6 +5,7 @@ const ROUTING_TO_EVENT_TYPE = {
   'station.clicked':        'CLICK',
   'reservation.confirmed':  'RESERVATION_CONFIRMED',
   'reservation.rejected':   'RESERVATION_REJECTED',
+  'reservation.cancelled':  'RESERVATION_CANCELLED',
   'invoice.issued':         'INVOICE_ISSUED',
   'payment.completed':      'PAYMENT_COMPLETED'
 };

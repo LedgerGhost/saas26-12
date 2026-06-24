@@ -8,6 +8,8 @@ import LoginPage from './pages/LoginPage';
 import FirstRunSetupPage from './pages/FirstRunSetupPage';
 import RegisterProviderPage from './pages/RegisterProviderPage';
 import ProviderAnalyticsPage from './pages/ProviderAnalyticsPage';
+import ProviderStationsPage from './pages/ProviderStationsPage';
+import ProviderReservationsPage from './pages/ProviderReservationsPage';
 import InvoicesPage from './pages/InvoicesPage';
 import LogExportPage from './pages/LogExportPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -26,6 +28,8 @@ const NAV: Record<string, NavItem[]> = {
   ],
   provider: [
     { path: '/provider/dashboard', label: 'Dashboard', icon: 'chart' },
+    { path: '/provider/stations',  label: 'Stations',  icon: 'map' },
+    { path: '/provider/reservations', label: 'Reservations', icon: 'history' },
     { path: '/provider/invoices',  label: 'Invoices',  icon: 'doc' },
     { path: '/provider/logs',      label: 'Logs',      icon: 'download' },
     { path: '/provider/setup',     label: 'Account',   icon: 'settings' }
@@ -127,6 +131,8 @@ export default function App() {
 
           {/* Provider routes */}
           {role === 'provider' && <Route path="/provider/dashboard" element={<ProviderAnalyticsPage />} />}
+          {role === 'provider' && <Route path="/provider/stations"  element={<ProviderStationsPage />} />}
+          {role === 'provider' && <Route path="/provider/reservations" element={<ProviderReservationsPage />} />}
           {role === 'provider' && <Route path="/provider/invoices"  element={<InvoicesPage />} />}
           {role === 'provider' && <Route path="/provider/logs"      element={<LogExportPage />} />}
           {role === 'provider' && <Route path="/provider/setup"     element={<RegisterProviderPage />} />}
@@ -144,5 +150,3 @@ export default function App() {
     </div>
   );
 }
-
-

@@ -8,7 +8,10 @@ const requireUser = (req, res, next) => {
 };
 
 router.get('/', invoiceController.list);
+// Static paths must precede the '/:invoiceId' param route below.
+router.get('/billable', requireUser, invoiceController.billableSummary);
 router.get('/:invoiceId', invoiceController.get);
+router.post('/create', requireUser, invoiceController.createInvoice);
 router.post('/draft-month', requireUser, invoiceController.draftCurrentMonth);
 router.post('/checkout-session', invoiceController.createCheckoutSession);
 

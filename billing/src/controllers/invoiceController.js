@@ -20,6 +20,43 @@ async function resolveProviderId(req) {
   }
 }
 
+// Resolve which provider a write (create-invoice) targets.
+// Operators name the provider explicitly; providers can only act on themselves.
+async function resolveTargetProviderId(req) {
+  if (req.user?.role === 'operator') {
+    const id = req.body?.providerId || req.query.providerId;
+    return id ? String(id).trim() : null;
+  }
+  return resolveProviderId(req);
+}
+
+// Group charges into one invoice line item per calendar day: the day's
+// reservation count (quantity), the summed subtotal, and the derived unit price.
+// Pure + exported so it can be unit-tested without a DB.
+function rollupLineItems(charges = []) {
+  const byDay = new Map();
+  for (const c of charges) {
+    const ts = c.createdAt || c.created_at || c.endTime || new Date();
+    const day = new Date(ts).toISOString().slice(0, 10);
+    const row = byDay.get(day) || { quantity: 0, subtotal: 0 };
+    row.quantity += 1;
+    row.subtotal += (c.amount || 0);
+    byDay.set(day, row);
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, r]) => {
+      const subtotal = +r.subtotal.toFixed(2);
+      return {
+        description: `Reservations on ${day}`,
+        quantity: r.quantity,
+        unitPrice: +(subtotal / r.quantity).toFixed(4),
+        subtotal
+      };
+    });
+}
+exports.rollupLineItems = rollupLineItems;
+
 exports.list = async (req, res) => {
   const providerId = await resolveProviderId(req);
   if (!providerId) return res.status(404).json({ error: 'PROVIDER_NOT_FOUND' });
@@ -39,6 +76,113 @@ exports.get = async (req, res) => {
     res.json(invoice);
   } catch (err) {
     res.status(400).json({ error: 'BAD_ID', message: err.message });
+  }
+};
+
+// GET /api/invoices/billable
+// Returns the not-yet-invoiced reservation charges, summed per provider.
+// Operators get every provider (or a single one via ?providerId=); a provider
+// only ever sees their own outstanding total. This is what feeds the operator's
+// "Create Invoice" screen — the sum of all reservations made for the provider.
+exports.billableSummary = async (req, res) => {
+  const isOperator = req.user?.role === 'operator';
+  const match = { invoicedAt: null };
+
+  if (isOperator) {
+    if (req.query.providerId) match.providerId = String(req.query.providerId).trim();
+  } else {
+    const providerId = await resolveProviderId(req);
+    if (!providerId) return res.status(404).json({ error: 'PROVIDER_NOT_FOUND' });
+    match.providerId = providerId;
+  }
+
+  try {
+    const rows = await Charge.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: '$providerId',
+          total: { $sum: '$amount' },
+          count: { $sum: 1 },
+          currency: { $first: '$currency' }
+        }
+      },
+      { $sort: { total: -1 } }
+    ]);
+
+    const providers = rows.map(r => ({
+      providerId: r._id,
+      total: +(r.total || 0).toFixed(2),
+      count: r.count,
+      currency: r.currency || 'EUR'
+    }));
+    const total = +providers.reduce((s, p) => s + p.total, 0).toFixed(2);
+
+    res.json({ scope: isOperator ? 'global' : 'own', providers, total });
+  } catch (err) {
+    res.status(500).json({ error: 'BILLABLE_FAILED', message: err.message });
+  }
+};
+
+// POST /api/invoices/create   body (operator): { providerId }
+// Issues a single invoice covering ALL outstanding reservation charges for a
+// provider. Operators pick the provider; providers self-bill their own charges.
+// The invoice is created as ISSUED (immediately payable) and appears on the
+// provider's Invoices page.
+exports.createInvoice = async (req, res) => {
+  const providerId = await resolveTargetProviderId(req);
+  if (!providerId) {
+    return req.user?.role === 'operator'
+      ? res.status(400).json({ error: 'PROVIDER_ID_REQUIRED', message: 'Select a provider to invoice.' })
+      : res.status(404).json({ error: 'PROVIDER_NOT_FOUND' });
+  }
+
+  try {
+    const now = new Date();
+    const billingPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 14); // Due 14th of next month
+
+    // Mint the invoice _id locally, then CLAIM the outstanding charges by stamping
+    // that id atomically. The `invoicedAt: null` filter means a concurrent create
+    // — or the billing cron — can never grab the same charge twice, without a
+    // transaction (standalone Mongo can't run them). Nothing claimed ⇒ nothing to bill.
+    const invoice = new Invoice({
+      providerId, billingPeriod, totalAmount: 0, currency: 'EUR',
+      issuedAt: now, dueDate, status: 'ISSUED'
+    });
+
+    const claim = await Charge.updateMany(
+      { providerId, invoicedAt: null },
+      { $set: { invoiceId: invoice._id.toString(), invoicedAt: now } }
+    );
+    if (!claim.modifiedCount) {
+      return res.status(200).json({ empty: true, message: 'No outstanding reservations to invoice for this provider.' });
+    }
+
+    const charges = await Charge.find({ invoiceId: invoice._id.toString() });
+    invoice.totalAmount = +charges.reduce((acc, c) => acc + c.amount, 0).toFixed(2);
+    invoice.currency = charges[0].currency || 'EUR';
+    invoice.reservations = charges.map(c => ({
+      reservationId: c.reservationId,
+      pointId: c.stationId || 'Unknown Point',
+      timestamp: c.endTime || c.created_at || c.createdAt || new Date(),
+      charge: c.amount
+    }));
+    invoice.lineItems = rollupLineItems(charges);
+    await invoice.save();
+
+    publish('invoice.issued', {
+      invoiceId: invoice._id.toString(),
+      providerId: invoice.providerId,
+      amount: invoice.totalAmount,
+      currency: invoice.currency,
+      ts: new Date().toISOString()
+    }).catch(e => console.warn('[billing-service] publish invoice.issued failed:', e.message));
+
+    res.status(201).json({ message: 'Invoice issued.', invoice });
+  } catch (err) {
+    console.error('[billing-service] createInvoice failed:', err);
+    res.status(500).json({ error: 'CREATE_FAILED', message: err.message });
   }
 };
 

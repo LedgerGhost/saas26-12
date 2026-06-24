@@ -42,12 +42,19 @@ module.exports = async function eventHandler(routingKey, payload) {
   const orch = process.env.ORCHESTRATOR_URL;
   if (!orch) return;
   axios.get(`${orch}/stations/${encodeURIComponent(stationId)}`, { timeout: 5_000 })
-    .then(r => {
+    .then(async r => {
       const d = r.data;
       if (!d?.status) return;
+      const existing = await StationCache.findOne({ stationId: d.stationId || stationId })
+        .select('manualStatus status')
+        .lean();
       return StationCache.findOneAndUpdate(
         { stationId: d.stationId || stationId },
-        { status: normalizeStationStatus(d.status), pricePerKwh: d.pricePerKwh, lastSyncedAt: new Date() },
+        {
+          status: existing?.manualStatus ? normalizeStationStatus(existing.status) : normalizeStationStatus(d.status),
+          pricePerKwh: d.pricePerKwh,
+          lastSyncedAt: new Date()
+        },
         { upsert: false }
       );
     })

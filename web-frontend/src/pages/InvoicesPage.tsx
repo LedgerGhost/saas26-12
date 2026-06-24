@@ -24,7 +24,6 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [busyIssue, setBusyIssue] = useState(false);
   const [openInvoice, setOpenInvoice] = useState<Invoice | null>(null);
 
   async function load() {
@@ -37,21 +36,6 @@ export default function InvoicesPage() {
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
-
-  async function draftCurrentMonth() {
-    setBusyIssue(true); setErr(null); setInfo(null);
-    try {
-      const r = await api.post('/invoices/draft-month');
-      if (r.data?.empty) {
-        setInfo('No new charges this month to draft.');
-      } else {
-        setInfo(r.data?.message || 'Drafted current month successfully.');
-      }
-      await load();
-    } catch (e: any) {
-      setErr(e.response?.data?.message || e.message);
-    } finally { setBusyIssue(false); }
-  }
 
   const kpis = useMemo(() => {
     const outstanding = invoices.filter(i => i.status === 'ISSUED' || i.status === 'PENDING').reduce((s, i) => s + i.totalAmount, 0);
@@ -88,10 +72,6 @@ export default function InvoicesPage() {
             <button className="btn btn-ghost" onClick={load} disabled={loading}>
               <Icon name="history" size={14} /> Refresh
             </button>
-            
-            <button className="btn btn-primary" onClick={draftCurrentMonth} disabled={busyIssue}>
-              <Icon name="plus" size={14} /> {busyIssue ? 'Drafting…' : 'Draft Current Month'}
-            </button>
           </div>
         </div>
 
@@ -108,7 +88,7 @@ export default function InvoicesPage() {
           <div className="card" style={{ padding: 32, textAlign: 'center' }}>
             <div className="t-h2">No invoices yet</div>
             <div className="t-small muted" style={{ marginTop: 4, marginBottom: 14 }}>
-              Click <em>Draft Current Month</em> to preview this month's charges.
+              Invoices appear here once issued — by the saasPlug team, or via <em>Create invoice</em> on your Dashboard.
             </div>
           </div>
         )}
@@ -135,7 +115,12 @@ export default function InvoicesPage() {
                       style={{ cursor: 'pointer' }}
                     >
                       <td className="t-mono" style={{ fontWeight: 500 }}>{inv._id.slice(-8).toUpperCase()}</td>
-                      <td style={{ fontWeight: 600 }}>{inv.billingPeriod || new Date(inv.issuedAt).toLocaleDateString()}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {inv.billingPeriod || new Date(inv.issuedAt).toLocaleDateString()}
+                        <div className="t-small muted" style={{ fontWeight: 400 }}>
+                          Issued {new Date(inv.issuedAt).toLocaleDateString()}
+                        </div>
+                      </td>
                       <td className="muted">{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString() : '—'}</td>
                       <td className="num">{inv.totalAmount.toFixed(2)} {inv.currency}</td>
                       <td>

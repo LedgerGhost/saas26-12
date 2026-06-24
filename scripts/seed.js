@@ -89,9 +89,10 @@ async function authed(token, path, opts = {}) {
   }
 
   // 5) Issue an invoice as the provider (will return empty if no charges yet).
-  const issued = await authed(prov.accessToken, '/invoices/issue', { method: 'POST' });
+  const issued = await authed(prov.accessToken, '/invoices/create', { method: 'POST' });
+  const inv = issued.data?.invoice;
   if (issued.data?.empty) console.log('  • no outstanding charges to invoice yet (run again after some reservations).');
-  else if (issued.data?._id) console.log('  ✓ issued invoice:', issued.data._id, `(${issued.data.totalAmount} ${issued.data.currency})`);
+  else if (inv?._id) console.log('  ✓ issued invoice:', inv._id, `(${inv.totalAmount} ${inv.currency})`);
 
   console.log('\nSeed complete. Open http://localhost and sign in as one of:');
   console.log('  operator@saasplug.demo   (role: operator)');

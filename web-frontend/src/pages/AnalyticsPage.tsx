@@ -45,6 +45,8 @@ export default function AnalyticsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>('RESERVATION_CONFIRMED');
   const [activeSet, setActiveSet] = useState<Set<string> | null>(null);
+  const [invoiceModal, setInvoiceModal] = useState(false);
+  const [invoiceInfo, setInvoiceInfo] = useState<string | null>(null);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -179,10 +181,14 @@ export default function AnalyticsPage() {
           </div>
           <div className="row" style={{ gap: 10 }}>
             <DateSeg value={range} onChange={setRange} options={['7d', '30d', 'MTD']} />
+            <button className="btn btn-primary" onClick={() => { setInvoiceInfo(null); setInvoiceModal(true); }}>
+              <Icon name="doc" size={14} /> Create invoice
+            </button>
           </div>
         </div>
 
         {err && <div className="card" style={{ padding: 14, color: 'var(--offline)' }}>{err}</div>}
+        {invoiceInfo && <div className="card" style={{ padding: 14, color: 'var(--available)' }}>{invoiceInfo}</div>}
 
         {/* KPI strip */}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(6, 1fr)', gap: 14 }}>
@@ -321,6 +327,159 @@ export default function AnalyticsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {invoiceModal && (
+        <CreateInvoiceModal
+          onClose={() => setInvoiceModal(false)}
+          onIssued={msg => { setInvoiceInfo(msg); setInvoiceModal(false); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Operator: create & assign an invoice to a provider ─── */
+type BillableProvider = { providerId: string; total: number; count: number; currency: string };
+type ProviderRow = { _id: string; companyName: string; providerSystemId?: string };
+// A billing target merges a registered provider with its outstanding charges,
+// matched case-insensitively so a casing mismatch between providerSystemId and
+// the reservation providerId can't hide a balance. `id` is the actual charge
+// provider id we POST to /invoices/create.
+type Target = { id: string; label: string; total: number; count: number; currency: string };
+
+function CreateInvoiceModal({ onClose, onIssued }: { onClose: () => void; onIssued: (msg: string) => void }) {
+  const [targets, setTargets] = useState<Target[]>([]);
+  const [selected, setSelected] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [p, b] = await Promise.all([
+          api.get('/providers'),
+          api.get('/invoices/billable')
+        ]);
+        const providers: ProviderRow[] = (p.data?.providers || []).filter((x: ProviderRow) => x.providerSystemId);
+        const billable = (b.data?.providers || []) as BillableProvider[];
+        const byId = new Map<string, BillableProvider>();
+        for (const row of billable) byId.set(row.providerId.toLowerCase(), row);
+
+        const matched = new Set<string>();
+        const list: Target[] = providers.map(pr => {
+          const sys = pr.providerSystemId!;
+          const hit = byId.get(sys.toLowerCase());
+          if (hit) matched.add(sys.toLowerCase());
+          return {
+            id: hit?.providerId || sys, // bill the real charge id when known
+            label: pr.companyName,
+            total: hit?.total || 0,
+            count: hit?.count || 0,
+            currency: hit?.currency || 'EUR'
+          };
+        });
+        // Surface outstanding balances with no registered provider so the money
+        // is still reachable (labelled by the raw provider id).
+        for (const row of billable) {
+          if (matched.has(row.providerId.toLowerCase())) continue;
+          list.push({ id: row.providerId, label: row.providerId, total: row.total, count: row.count, currency: row.currency || 'EUR' });
+        }
+
+        setTargets(list);
+        // Default to the largest outstanding balance so the shown total matches.
+        const ranked = [...list].sort((a, b2) => b2.total - a.total);
+        setSelected(ranked[0]?.id || '');
+      } catch (e: any) {
+        setErr(e.response?.data?.message || e.message);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+
+  const current = targets.find(t => t.id === selected);
+  const outstanding = current?.total || 0;
+  const count = current?.count || 0;
+  const currency = current?.currency || 'EUR';
+
+  async function issue() {
+    if (!selected) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.post('/invoices/create', { providerId: selected });
+      if (r.data?.empty) {
+        setErr('This provider has no outstanding reservations to invoice.');
+        setBusy(false);
+        return;
+      }
+      const amt = r.data?.invoice?.totalAmount ?? outstanding;
+      onIssued(`Invoice for ${current?.label || selected} issued — €${Number(amt).toFixed(2)}. It is now visible on the provider's Invoices page.`);
+    } catch (e: any) {
+      setErr(e.response?.data?.message || e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-scrim" onClick={onClose} style={{ pointerEvents: 'auto' }}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '20px 24px 4px' }}>
+          <div className="t-h1">Create invoice</div>
+          <div className="t-small muted" style={{ marginTop: 2 }}>
+            Bill a provider for their outstanding reservation fees.
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {err && <div className="card" style={{ padding: 12, color: 'var(--offline)' }}>{err}</div>}
+
+          {loading ? (
+            <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-3)' }}>Loading providers…</div>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="inv-provider">Provider</label>
+                <select
+                  id="inv-provider"
+                  className="select"
+                  value={selected}
+                  onChange={e => setSelected(e.target.value)}
+                >
+                  {targets.length === 0 && <option value="">No providers found</option>}
+                  {targets.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.label} — €{t.total.toFixed(2)} outstanding
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ background: 'var(--bg-sunk)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <span className="t-small muted">Reservations to bill</span>
+                  <span className="t-small t-num" style={{ color: 'var(--text)' }}>{count}</span>
+                </div>
+                <div style={{ height: 1, background: 'var(--border)' }} />
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <strong>Invoice total</strong>
+                  <strong className="t-num" style={{ fontSize: 16 }}>€{outstanding.toFixed(2)} {currency}</strong>
+                </div>
+              </div>
+
+              <div className="t-small muted" style={{ display: 'flex', gap: 8 }}>
+                <Icon name="info" size={14} />
+                <span>The total is the sum of every reservation fee charged to this provider that hasn't been invoiced yet.</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: '12px 16px 16px', display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid var(--border)' }}>
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-primary" onClick={issue} disabled={busy || loading || !selected || outstanding <= 0}>
+            <Icon name="doc" size={14} /> {busy ? 'Issuing…' : `Issue invoice €${outstanding.toFixed(2)}`}
+          </button>
         </div>
       </div>
     </div>

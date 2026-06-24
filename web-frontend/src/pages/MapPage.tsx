@@ -90,7 +90,7 @@ export default function MapPage() {
   const [focusTarget, setFocusTarget] = useState<StationFocusTarget | null>(null);
   const markerRefs = useRef<Record<string, L.Marker | null>>({});
   const reservationClockItems = useMemo<TimedReservation[]>(() => {
-    const reservations = Object.values(activeReservations);
+    const reservations: TimedReservation[] = Object.values(activeReservations);
     if (lastReservation?.endTime) {
       reservations.push({ status: 'CONFIRMED', endTime: lastReservation.endTime });
     }
@@ -532,7 +532,7 @@ function MapViewportGuards() {
       if (map.getZoom() < minZoomForViewport) {
         map.setZoom(minZoomForViewport, { animate: false });
       }
-      map.panInsideBounds(L.latLngBounds(WORLD_BOUNDS), { animate: false });
+      map.panInsideBounds(WORLD_BOUNDS, { animate: false });
     };
 
     const frame = window.requestAnimationFrame(applyGuards);

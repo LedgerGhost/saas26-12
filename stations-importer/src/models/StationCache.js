@@ -12,6 +12,9 @@ const stationCacheSchema = new mongoose.Schema({
   status:            { type: String, enum: STATION_STATUSES, default: 'offline' },
   pricePerKwh:       { type: Number },
   capacityKw:        { type: Number },
+  connector:         { type: String },
+  providerManaged:   { type: Boolean, default: false, index: true },
+  manualStatus:      { type: Boolean, default: false },
   lastSyncedAt:      { type: Date, default: Date.now, index: true }
 }, { collection: 'station_cache', timestamps: true });
 

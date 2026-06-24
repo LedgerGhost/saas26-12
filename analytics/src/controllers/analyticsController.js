@@ -1,6 +1,9 @@
 const axios = require('axios');
 const LogEntry = require('../models/LogEntry');
 
+const EXPORT_TIME_ZONE = 'Europe/Athens';
+const RESERVATIONS = () => process.env.RESERVATION_SERVICE_URL;
+
 /**
  * Resolve a userId to a providerId via provider-service.
  * Returns the providerId string or null if no provider exists for this user.
@@ -176,49 +179,229 @@ exports.globalAnalytics = async (req, res) => {
   res.json({ scope: 'global', filters: req.query, ...data });
 };
 
-//  POST /api/analytics/export   body: { from, to, providerId?, format } 
+//  POST /api/analytics/export   body: { from, to, providerId?, format, timeZone? }
 exports.exportLogs = async (req, res) => {
   try {
     const { from, to, format, eventType } = req.body || {};
+    const timeZone = safeTimeZone(req.body?.timeZone || req.body?.tz || EXPORT_TIME_ZONE);
     const providerId = await resolveExportProviderId(req, req.body?.providerId);
     if (providerId && providerId.error) {
       return res.status(providerId.status).json(providerId.error);
     }
-    const match = buildBaseMatch({ from, to, providerId, eventType });
+    const match = buildExportMatch({ from, to, providerId, eventType, timeZone });
     // Optimized query by explicit projection and cursor batch size, to avoid memory issues with large exports. 
     // Fetch what you only need
-    const rows = await LogEntry.find(match)
-      .select('createdAt eventType providerId stationId userId')
+    const rawRows = await LogEntry.find(match)
+      .select('createdAt eventType providerId stationId userId metadata')
       .sort({ createdAt: 1 })
       .limit(50_000)
       .lean();
+    const rows = await filterExportRows(rawRows);
 
     if ((format || 'json').toLowerCase() === 'csv') {
-      const headers = ['createdAt', 'eventType', 'providerId', 'stationId', 'userId'];
+      const headers = [
+        'createdAtAthens',
+        'createdAtUtc',
+        'eventType',
+        'providerId',
+        'stationId',
+        'userId',
+        'reservationId',
+        'endTimeAthens'
+      ];
       const lines = [headers.join(',')];
       for (const r of rows) {
         lines.push([
+          formatInTimeZone(r.createdAt, timeZone),
           new Date(r.createdAt).toISOString(),
           r.eventType,
           r.providerId || '',
           r.stationId  || '',
-          r.userId     || ''
+          r.userId     || '',
+          r.metadata?.reservationId || '',
+          r.metadata?.endTime ? formatInTimeZone(r.metadata.endTime, timeZone) : ''
         ].map(csvEscape).join(','));
       }
       res.set('Content-Type', 'text/csv');
       res.set('Content-Disposition', 'attachment; filename="saasplug-logs.csv"');
       return res.send(lines.join('\n'));
     }
-    res.json({ count: rows.length, rows });
+    res.json({
+      count: rows.length,
+      timeZone,
+      rows: rows.map(r => ({
+        ...r,
+        createdAtAthens: formatInTimeZone(r.createdAt, timeZone),
+        createdAtUtc: new Date(r.createdAt).toISOString(),
+        reservationId: r.metadata?.reservationId || null,
+        endTimeAthens: r.metadata?.endTime ? formatInTimeZone(r.metadata.endTime, timeZone) : null
+      }))
+    });
   } catch (err) {
     res.status(500).json({ error: 'EXPORT_FAILED', message: err.message });
   }
 };
 
+function buildExportMatch({ from, to, providerId, eventType, timeZone }) {
+  const match = buildBaseMatch({ providerId, eventType });
+  if (from || to) {
+    match.createdAt = {};
+    if (from) match.createdAt.$gte = parseExportBoundary(from, timeZone, 'start');
+    if (to)   match.createdAt.$lte = parseExportBoundary(to, timeZone, 'end');
+  }
+  return match;
+}
+
+async function filterExportRows(rows) {
+  const confirmed = rows.filter(r => r.eventType === 'RESERVATION_CONFIRMED');
+  if (!confirmed.length) return rows;
+
+  const now = new Date();
+  const reservationIds = confirmed
+    .map(r => r.metadata?.reservationId)
+    .filter(Boolean);
+  const reservationStatuses = await fetchReservationStatuses(reservationIds);
+  const cancelledIds = new Set();
+
+  if (reservationIds.length) {
+    const cancelledRows = await LogEntry.find({
+      eventType: 'RESERVATION_CANCELLED',
+      'metadata.reservationId': { $in: reservationIds }
+    })
+      .select('metadata.reservationId')
+      .lean();
+    for (const row of cancelledRows) {
+      if (row.metadata?.reservationId) cancelledIds.add(row.metadata.reservationId);
+    }
+  }
+
+  return rows.filter(row => {
+    if (row.eventType !== 'RESERVATION_CONFIRMED') return true;
+    const reservationId = row.metadata?.reservationId;
+    const currentReservation = reservationId ? reservationStatuses.get(reservationId) : null;
+    if (currentReservation) {
+      return currentReservation.status === 'EXPIRED';
+    }
+
+    const end = row.metadata?.endTime ? new Date(row.metadata.endTime) : null;
+    if (!end || Number.isNaN(end.getTime()) || end > now) return false;
+    return !reservationId || !cancelledIds.has(reservationId);
+  });
+}
+
+async function fetchReservationStatuses(reservationIds) {
+  const statuses = new Map();
+  if (!RESERVATIONS() || !reservationIds.length) return statuses;
+
+  try {
+    const r = await axios.post(
+      `${RESERVATIONS()}/api/reservations/internal/statuses`,
+      { reservationIds },
+      {
+        timeout: 5_000,
+        headers: { 'x-internal-token': process.env.INTERNAL_AUTH_TOKEN || '' }
+      }
+    );
+    for (const row of r.data?.reservations || []) {
+      if (row.reservationId) statuses.set(row.reservationId, row);
+    }
+  } catch (err) {
+    console.warn('[analytics-service] reservation status lookup failed:', err.message);
+  }
+
+  return statuses;
+}
+
 function csvEscape(v) {
   if (v == null) return '';
   const s = String(v);
   return /[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function parseExportBoundary(value, timeZone, edge) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number);
+    return zonedDateTimeToUtc({
+      year,
+      month,
+      day,
+      hour: edge === 'end' ? 23 : 0,
+      minute: edge === 'end' ? 59 : 0,
+      second: edge === 'end' ? 59 : 0
+    }, timeZone);
+  }
+  return new Date(value);
+}
+
+function safeTimeZone(timeZone) {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return EXPORT_TIME_ZONE;
+  }
+}
+
+function zonedDateTimeToUtc(parts, timeZone) {
+  const targetUtcMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  let candidate = new Date(targetUtcMs);
+
+  for (let i = 0; i < 3; i += 1) {
+    const candidateParts = getTimeZoneParts(candidate, timeZone);
+    const candidateAsUtcMs = Date.UTC(
+      candidateParts.year,
+      candidateParts.month - 1,
+      candidateParts.day,
+      candidateParts.hour,
+      candidateParts.minute,
+      candidateParts.second
+    );
+    candidate = new Date(candidate.getTime() - (candidateAsUtcMs - targetUtcMs));
+  }
+
+  return candidate;
+}
+
+function getTimeZoneParts(value, timeZone) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+
+  const mapped = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') mapped[part.type] = part.value;
+  }
+  return {
+    year: Number(mapped.year),
+    month: Number(mapped.month),
+    day: Number(mapped.day),
+    hour: Number(mapped.hour),
+    minute: Number(mapped.minute),
+    second: Number(mapped.second)
+  };
+}
+
+function formatInTimeZone(value, timeZone) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = getTimeZoneParts(date, timeZone);
+  const pad = n => String(n).padStart(2, '0');
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`;
 }
 
 async function resolveExportProviderId(req, requestedProviderId) {
@@ -248,4 +431,4 @@ async function resolveExportProviderId(req, requestedProviderId) {
   return ownProviderId;
 }
 
-exports._private = { buildBaseMatch, resolveExportProviderId };
+exports._private = { buildBaseMatch, buildExportMatch, resolveExportProviderId };

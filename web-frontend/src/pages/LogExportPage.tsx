@@ -5,8 +5,9 @@ import { Icon } from '../lib/Icon';
 const EVENT_TYPES = [
   { k: 'SEARCH',                hint: 'Map searches and filter changes' },
   { k: 'CLICK',                 hint: 'Station popup opens' },
-  { k: 'RESERVATION_CONFIRMED', hint: 'Successful reservations' },
-  { k: 'RESERVATION_REJECTED',  hint: 'Failed reservations' }
+  { k: 'RESERVATION_CONFIRMED', hint: 'Successful reservations after the hold window ends' },
+  { k: 'RESERVATION_REJECTED',  hint: 'Failed reservations' },
+  { k: 'RESERVATION_CANCELLED', hint: 'Cancelled reservations' }
 ] as const;
 
 type EventKey = typeof EVENT_TYPES[number]['k'];
@@ -19,7 +20,11 @@ export default function LogExportPage() {
   const [format, setFormat] = useState<'csv' | 'json'>('csv');
   const [separateFiles, setSeparateFiles] = useState(false); // NEW STATE
   const [types, setTypes] = useState<Record<EventKey, boolean>>({
-    SEARCH: true, CLICK: true, RESERVATION_CONFIRMED: true, RESERVATION_REJECTED: false
+    SEARCH: true,
+    CLICK: true,
+    RESERVATION_CONFIRMED: true,
+    RESERVATION_REJECTED: false,
+    RESERVATION_CANCELLED: false
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr]   = useState<string | null>(null);
@@ -30,9 +35,10 @@ export default function LogExportPage() {
     try {
       const r = await api.post('/analytics/export',
         {
-          from: `${from}T00:00:00Z`,
-          to:   `${to}T23:59:59Z`,
+          from,
+          to,
           format,
+          timeZone: 'Europe/Athens',
           ...(eventTypes ? { eventType: eventTypes } : {})
         },
         { responseType: format === 'csv' ? 'blob' : 'json' }
@@ -82,7 +88,7 @@ export default function LogExportPage() {
         setInfo(`Downloaded ${selected.length} separate ${format.toUpperCase()} file(s).`);
       } else {
         // Combined request (passed as array to backend)
-        await downloadOne(selected.length === EVENT_TYPES.length ? undefined : selected);
+        await downloadOne(selected);
         setInfo(`Downloaded 1 combined ${format.toUpperCase()} file.`);
       }
     } catch (e: any) {
