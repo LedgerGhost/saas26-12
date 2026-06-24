@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Icon } from '../lib/Icon';
+import { providerColor } from '../lib/providers';
 import {
   getReservationEffectiveStatus,
   isReservationLive,
@@ -26,14 +27,6 @@ const STATUS_BADGE: Record<R['status'], { cls: string; label: string }> = {
   EXPIRED:   { cls: 'badge',         label: 'Expired' },
   CANCELLED: { cls: 'badge',         label: 'Cancelled' }
 };
-
-// Stable color per provider — picked from the design's palette
-const PROVIDER_COLORS = ['#ef4444', '#0EA5E9', '#1d4ed8', '#a855f7', '#f59e0b', '#16a34a'];
-function colorFor(providerId: string): string {
-  let hash = 0;
-  for (let i = 0; i < providerId.length; i++) hash = (hash * 31 + providerId.charCodeAt(i)) >>> 0;
-  return PROVIDER_COLORS[hash % PROVIDER_COLORS.length];
-}
 
 export default function ReservationsPage() {
   const navigate = useNavigate();
@@ -124,7 +117,7 @@ export default function ReservationsPage() {
                     <span>{when}{time && ` · ${time}`}</span>
                     <span>·</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: 2, background: colorFor(r.providerId) }} />
+                      <span style={{ width: 7, height: 7, borderRadius: 2, background: providerColor(r.providerId) }} />
                       {r.providerId}
                     </span>
                   </div>

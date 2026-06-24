@@ -165,7 +165,7 @@ export default function ProviderAnalyticsPage() {
         {/* KPI strip */}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
           <KPI
-            label="Search impressions"
+            label="Search appearances"
             value={(totals?.SEARCH || 0).toLocaleString()}
             spark={<Sparkline data={pad(data, 'SEARCH', range)} w={180} h={28} color="var(--accent)" />}
           />
@@ -200,7 +200,7 @@ export default function ProviderAnalyticsPage() {
             </div>
             <div className="seg">
               <button aria-pressed={metric === 'RESERVATION_CONFIRMED'} onClick={() => setMetric('RESERVATION_CONFIRMED')}>Reservations</button>
-              <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Impressions</button>
+              <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Appearances</button>
               <button aria-pressed={metric === 'CLICK'} onClick={() => setMetric('CLICK')}>Clicks</button>
             </div>
           </div>
@@ -208,7 +208,7 @@ export default function ProviderAnalyticsPage() {
             {loading ? (
               <div style={{ height: 260, display: 'grid', placeItems: 'center', color: 'var(--text-3)' }}>Loading…</div>
             ) : (
-              <LineChart series={{ data: series, color: 'var(--accent)' }} height={260} formatY={v => v.toLocaleString()} />
+              <LineChart series={{ name: metricLabel(metric), data: series, color: 'var(--accent)' }} height={260} formatY={v => v.toLocaleString()} />
             )}
           </div>
         </div>
@@ -269,7 +269,7 @@ export default function ProviderAnalyticsPage() {
 
 function metricLabel(m: string): string {
   if (m === 'RESERVATION_CONFIRMED') return 'Reservations';
-  if (m === 'SEARCH') return 'Search impressions';
+  if (m === 'SEARCH') return 'Search appearances';
   return 'Clicks';
 }
 

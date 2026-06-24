@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { Icon } from '../lib/Icon';
 import { KPI } from '../lib/charts';
+import { providerColor } from '../lib/providers';
 import {
   getReservationEffectiveStatus,
   useReservationClock,
@@ -27,13 +28,6 @@ const STATUS_BADGE: Record<R['status'], string> = {
   EXPIRED:   'badge',
   CANCELLED: 'badge'
 };
-
-const COLOR_POOL = ['#ef4444', '#0EA5E9', '#1d4ed8', '#a855f7', '#f59e0b', '#16a34a'];
-function colorFor(s: string) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return COLOR_POOL[h % COLOR_POOL.length];
-}
 
 export default function AllReservationsPage() {
   const [rows, setRows] = useState<R[]>([]);
@@ -162,7 +156,7 @@ export default function AllReservationsPage() {
                     <td className="t-mono t-small">{r.stationId}</td>
                     <td>
                       <span className="row" style={{ gap: 6 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 2, background: colorFor(r.providerId) }} />
+                        <span style={{ width: 8, height: 8, borderRadius: 2, background: providerColor(r.providerId) }} />
                         {r.providerId}
                       </span>
                     </td>

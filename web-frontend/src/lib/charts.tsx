@@ -98,8 +98,9 @@ export function LineChart({
   multi = false
 }: LineChartProps) {
   const seriesArr = Array.isArray(series) ? series : [series];
-  const allValues = seriesArr.flatMap(s => s.data.map(d => d.value));
-  const max = Math.max(...allValues, 1);
+  const allValues = seriesArr.flatMap(s => s.data.map(d => d.value)).filter(Number.isFinite);
+  const maxValue = Math.max(...allValues, 0);
+  const hasOnlyIntegerValues = allValues.every(v => Number.isInteger(v));
 
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(720);
@@ -109,7 +110,10 @@ export function LineChart({
     ro.observe(ref.current); return () => ro.disconnect();
   }, []);
 
-  const padL = 44, padR = 12, padT = 12, padB = 28;
+  const padL = 48;
+  const padR = 18;
+  const padT = Math.max(22, Math.min(34, height * 0.1));
+  const padB = Math.max(30, Math.min(38, height * 0.12));
   const W = w, H = height;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
@@ -117,38 +121,101 @@ export function LineChart({
   const dx = n > 1 ? innerW / (n - 1) : innerW;
 
   const yTicks = useMemo(() => {
-    const target = 4;
+    const target = Math.max(3, Math.min(5, Math.round(height / 72)));
     const niceStep = (raw: number) => {
+      if (!Number.isFinite(raw) || raw <= 0) return 1;
       const exp = Math.pow(10, Math.floor(Math.log10(raw)));
       const f = raw / exp;
-      const nice = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+      const nice = f < 1.5 ? 1 : f < 3 ? 2 : f < 4.5 ? 2.5 : f < 7 ? 5 : 10;
       return nice * exp;
     };
-    const step = niceStep(max / target);
+    const rawStep = niceStep(Math.max(maxValue, 1) / target);
+    const step = hasOnlyIntegerValues ? Math.max(1, Math.round(rawStep)) : rawStep;
+    const maxWithHeadroom = maxValue <= 0 ? step : maxValue * 1.08;
+    const yMax = Math.max(step, Math.ceil(maxWithHeadroom / step) * step);
     const ticks: number[] = [];
-    for (let v = 0; v <= max + step / 2; v += step) ticks.push(v);
+    for (let v = 0; v <= yMax + step / 2; v += step) {
+      ticks.push(Number(v.toFixed(8)));
+    }
     return ticks;
-  }, [max]);
+  }, [hasOnlyIntegerValues, height, maxValue]);
   const yMax = yTicks[yTicks.length - 1] || 1;
 
   const xFor = (i: number) => padL + i * dx;
   const yFor = (v: number) => padT + innerH - (v / yMax) * innerH;
 
   const [hover, setHover] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  useEffect(() => {
+    setSelected(current => {
+      if (!n) return null;
+      if (current == null || current >= n) return n - 1;
+      return current;
+    });
+  }, [n]);
+
+  function indexFromClientX(clientX: number, boundsLeft: number) {
+    if (n <= 0) return null;
+    const x = clientX - boundsLeft;
+    const i = Math.round((x - padL) / dx);
+    return Math.max(0, Math.min(n - 1, i));
+  }
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     const r = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const i = Math.round((x - padL) / dx);
-    if (i >= 0 && i < n) setHover(i);
+    setHover(indexFromClientX(e.clientX, r.left));
   }
+  function onSelect(e: React.MouseEvent<SVGSVGElement>) {
+    const r = e.currentTarget.getBoundingClientRect();
+    setSelected(indexFromClientX(e.clientX, r.left));
+  }
+  function onTouch(e: React.TouchEvent<SVGSVGElement>) {
+    const touch = e.touches[0];
+    if (!touch) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = indexFromClientX(touch.clientX, r.left);
+    setHover(i);
+    setSelected(i);
+  }
+
+  const activeIndex = hover ?? selected;
+  const activeRows = activeIndex == null ? [] : seriesArr.map((s, si) => {
+    const point = s.data[activeIndex];
+    return point ? {
+      key: `${s.name || si}-${activeIndex}`,
+      label: s.name || (multi ? `Series ${si + 1}` : 'Value'),
+      value: point.value,
+      date: point.date,
+      color: s.color || accent || 'var(--accent)'
+    } : null;
+  }).filter(Boolean) as { key: string; label: string; value: number; date: Date; color: string }[];
+  const activePointDate = activeRows[0]?.date;
+  const activeX = activeIndex == null ? null : xFor(activeIndex);
+  const activeMinY = activeIndex == null ? null : Math.min(
+    ...seriesArr
+      .map(s => s.data[activeIndex]?.value)
+      .filter((value): value is number => typeof value === 'number')
+      .map(yFor)
+  );
+  const tooltipW = multi ? 196 : 168;
+  const tooltipLeft = activeX == null ? 0 : Math.max(padL, Math.min(W - padR - tooltipW, activeX + 12 > W - tooltipW ? activeX - tooltipW - 12 : activeX + 12));
+  const tooltipTop = activeMinY == null || !Number.isFinite(activeMinY) ? padT : Math.max(8, Math.min(H - 108, activeMinY - 42));
 
   if (n === 0) {
     return <div ref={ref} style={{ width: '100%', height, display: 'grid', placeItems: 'center', color: 'var(--text-3)', fontSize: 13 }}>No data for this range.</div>;
   }
 
   return (
-    <div ref={ref} style={{ width: '100%' }}>
-      <svg width={W} height={H} onMouseMove={onMove} onMouseLeave={() => setHover(null)} style={{ display: 'block' }}>
+    <div ref={ref} className="chart-frame" style={{ width: '100%', height }}>
+      <svg
+        width={W}
+        height={H}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        onClick={onSelect}
+        onTouchStart={onTouch}
+        onTouchMove={onTouch}
+        style={{ display: 'block' }}
+      >
         {showGrid && yTicks.map((t, i) => (
           <g key={i}>
             <line className="grid-line" x1={padL} x2={W - padR} y1={yFor(t)} y2={yFor(t)} />
@@ -171,18 +238,37 @@ export function LineChart({
             </g>
           );
         })}
-        {hover != null && (
+        {activeIndex != null && (
           <g>
-            <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={H - padB} stroke="var(--border-strong)" strokeWidth="1" />
+            <line className="chart-crosshair" x1={xFor(activeIndex)} x2={xFor(activeIndex)} y1={padT} y2={H - padB} />
             {seriesArr.map((s, si) => {
-              const d = s.data[hover];
+              const d = s.data[activeIndex];
               if (!d) return null;
               const color = s.color || accent || 'var(--accent)';
-              return <circle key={si} cx={xFor(hover)} cy={yFor(d.value)} r="3.5" fill="var(--bg-elev)" stroke={color} strokeWidth="2" />;
+              return <circle key={si} className="chart-active-dot" cx={xFor(activeIndex)} cy={yFor(d.value)} r="4" fill="var(--bg-elev)" stroke={color} strokeWidth="2.5" />;
             })}
           </g>
         )}
       </svg>
+      {activeRows.length > 0 && activePointDate && (
+        <div
+          className="chart-tooltip"
+          style={{ left: tooltipLeft, top: tooltipTop, width: tooltipW }}
+        >
+          <div className="chart-tooltip-date">
+            {activePointDate.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}
+          </div>
+          {activeRows.map(row => (
+            <div className="chart-tooltip-row" key={row.key}>
+              <span className="chart-tooltip-series">
+                <span className="chart-tooltip-dot" style={{ background: row.color }} />
+                {row.label}
+              </span>
+              <strong>{formatY(row.value)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

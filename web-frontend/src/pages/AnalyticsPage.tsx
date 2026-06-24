@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { Icon } from '../lib/Icon';
 import { DateSeg, Donut, KPI, LineChart, Sparkline } from '../lib/charts';
+import { hasProviderId, providerColor } from '../lib/providers';
 
 type Totals = {
   CLICK: number; SEARCH: number;
@@ -33,10 +34,8 @@ type Metric = 'RESERVATION_CONFIRMED' | 'SEARCH' | 'CLICK' | 'REVENUE';
 
 const RANGES: Record<string, number> = { '7d': 7, '30d': 30, 'MTD': 24 };
 
-// Stable color palette matched to the design's mock providers
-const COLOR_POOL = ['#ef4444', '#0EA5E9', '#1d4ed8', '#a855f7', '#f59e0b', '#16a34a', '#7c3aed', '#06b6d4'];
 function colorFor(id: string, i: number): string {
-  return COLOR_POOL[i % COLOR_POOL.length];
+  return providerColor(id, i);
 }
 
 export default function AnalyticsPage() {
@@ -55,14 +54,23 @@ export default function AnalyticsPage() {
       const to   = new Date().toISOString();
       const r = await api.get('/analytics/global', { params: { from, to } });
       setData(r.data);
-      if (!activeSet) setActiveSet(new Set((r.data.perProvider || []).map((p: PerProvider) => p.providerId)));
+      if (!activeSet) {
+        setActiveSet(new Set(
+          (r.data.perProvider || [])
+            .filter((p: PerProvider) => hasProviderId(p.providerId))
+            .map((p: PerProvider) => p.providerId)
+        ));
+      }
     } catch (e: any) {
       setErr(e.response?.data?.message || e.message);
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [range]);
 
-  const providers = useMemo(() => data?.perProvider.map(p => p.providerId) || [], [data]);
+  const namedPerProvider = useMemo(() => (
+    (data?.perProvider || []).filter(p => hasProviderId(p.providerId))
+  ), [data]);
+  const providers = useMemo(() => namedPerProvider.map(p => p.providerId), [namedPerProvider]);
 
   // Build multi-series — one REAL line per active provider for the chosen metric,
   // padded for missing days. Uses the backend's per-provider daily series
@@ -74,6 +82,7 @@ export default function AnalyticsPage() {
     // providerId -> (dayKey -> count) for the selected event metric
     const byProvider = new Map<string, Map<string, number>>();
     for (const ps of data.providerSeries || []) {
+      if (!hasProviderId(ps.providerId)) continue;
       const m = new Map<string, number>();
       for (const pt of ps.days) {
         const b = pt.buckets.find(x => x.eventType === metric);
@@ -83,7 +92,7 @@ export default function AnalyticsPage() {
     }
 
     const out: { name: string; color: string; data: { date: Date; value: number }[] }[] = [];
-    (data.perProvider || []).forEach((p, i) => {
+    namedPerProvider.forEach((p, i) => {
       if (activeSet && !activeSet.has(p.providerId)) return;
       const dayMap = byProvider.get(p.providerId) || new Map();
       const series: { date: Date; value: number }[] = [];
@@ -94,7 +103,7 @@ export default function AnalyticsPage() {
       out.push({ name: p.providerId, color: colorFor(p.providerId, i), data: series });
     });
     return out;
-  }, [data, metric, range, activeSet]);
+  }, [data, metric, range, activeSet, namedPerProvider]);
 
   // Total line — daily event totals, or daily revenue when the Revenue metric is selected.
   const totalSeries = useMemo(() => {
@@ -121,17 +130,17 @@ export default function AnalyticsPage() {
   const donutSlices = useMemo(() => {
     if (!data) return [];
     if (metric === 'REVENUE') {
-      return data.perProvider.map((p, i) => ({
+      return namedPerProvider.map((p, i) => ({
         label: p.providerId,
         value: +(data.revenue?.perProvider?.[p.providerId] || 0).toFixed(2),
         color: colorFor(p.providerId, i)
       })).filter(s => s.value > 0);
     }
-    return data.perProvider.map((p, i) => {
+    return namedPerProvider.map((p, i) => {
       const ev = p.events.find(e => e.eventType === metric);
       return { label: p.providerId, value: ev?.count || 0, color: colorFor(p.providerId, i) };
     }).filter(s => s.value > 0);
-  }, [data, metric]);
+  }, [data, metric, namedPerProvider]);
 
   const totals = data?.totals;
   const fmtY = (v: number) => metric === 'REVENUE'
@@ -139,11 +148,11 @@ export default function AnalyticsPage() {
     : v.toLocaleString();
   const leaderboard = useMemo(() => {
     if (!data) return [];
-    return data.perProvider.map((p, i) => {
+    return namedPerProvider.map((p, i) => {
       const reservations = p.events.find(e => e.eventType === 'RESERVATION_CONFIRMED')?.count || 0;
       return { id: p.providerId, color: colorFor(p.providerId, i), total: p.total, reservations };
     }).sort((a, b) => b.reservations - a.reservations);
-  }, [data]);
+  }, [data, namedPerProvider]);
 
   function toggleProvider(id: string) {
     setActiveSet(prev => {
@@ -181,7 +190,7 @@ export default function AnalyticsPage() {
             label="Revenue" value={`€${(data?.revenue?.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           />
           <KPI
-            label="Search impressions" value={(totals?.SEARCH || 0).toLocaleString()}
+            label="Search appearances" value={(totals?.SEARCH || 0).toLocaleString()}
             spark={<Sparkline data={spark(data, 'SEARCH', range)} w={160} h={26} color="var(--accent)" />}
           />
           <KPI
@@ -207,7 +216,7 @@ export default function AnalyticsPage() {
               <div className="seg">
                 <button aria-pressed={metric === 'RESERVATION_CONFIRMED'} onClick={() => setMetric('RESERVATION_CONFIRMED')}>Reservations</button>
                 <button aria-pressed={metric === 'REVENUE'} onClick={() => setMetric('REVENUE')}>Revenue</button>
-                <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Impressions</button>
+                <button aria-pressed={metric === 'SEARCH'} onClick={() => setMetric('SEARCH')}>Appearances</button>
                 <button aria-pressed={metric === 'CLICK'}  onClick={() => setMetric('CLICK')}>Clicks</button>
               </div>
             </div>
@@ -217,10 +226,10 @@ export default function AnalyticsPage() {
               ) : multiSeries.length > 0 ? (
                 <LineChart series={multiSeries} multi height={300} formatY={fmtY} />
               ) : (
-                <LineChart series={{ data: totalSeries, color: 'var(--accent)' }} height={300} formatY={fmtY} />
+                <LineChart series={{ name: metricLabel(metric), data: totalSeries, color: 'var(--accent)' }} height={300} formatY={fmtY} />
               )}
               <div className="row" style={{ flexWrap: 'wrap', gap: 12, marginTop: 16 }}>
-                {data?.perProvider.map((p, i) => {
+                {namedPerProvider.map((p, i) => {
                   const on = !activeSet || activeSet.has(p.providerId);
                   const color = colorFor(p.providerId, i);
                   return (
@@ -255,10 +264,10 @@ export default function AnalyticsPage() {
                 ? <Donut slices={donutSlices} size={140} thickness={16} />
                 : <div style={{ width: 140, height: 140, borderRadius: '50%', border: '1px dashed var(--border)' }} />}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {data?.perProvider.length === 0 && (
+                {namedPerProvider.length === 0 && (
                   <div className="t-small muted">No data yet for this range.</div>
                 )}
-                {data?.perProvider.map((p, i) => {
+                {namedPerProvider.map((p, i) => {
                   const total = donutSlices.reduce((a, s) => a + s.value, 0) || 1;
                   const slice = donutSlices.find(s => s.label === p.providerId);
                   const pct = slice ? (slice.value / total) * 100 : 0;
@@ -321,7 +330,7 @@ export default function AnalyticsPage() {
 function metricLabel(m: string): string {
   if (m === 'RESERVATION_CONFIRMED') return 'Reservations';
   if (m === 'REVENUE') return 'Revenue';
-  if (m === 'SEARCH') return 'Search impressions';
+  if (m === 'SEARCH') return 'Search appearances';
   return 'Clicks';
 }
 

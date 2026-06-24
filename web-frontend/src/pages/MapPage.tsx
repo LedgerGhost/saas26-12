@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -46,6 +46,8 @@ const API_TO_TOKEN: Record<ApiStatus, 'available' | 'occupied' | 'offline' | 'un
 const TOKEN_COLOR: Record<string, string> = {
   available: '#16a34a', occupied: '#f59e0b', offline: '#dc2626', unknown: '#71717a'
 };
+const STATION_ICONS = createStationIcons(false);
+const FOCUSED_STATION_ICONS = createStationIcons(true);
 const PROVIDER_OPTIONS = [
   { id: 'redPlug', label: 'RedPlug' },
   { id: 'greenPlug', label: 'GreenPlug' },
@@ -64,6 +66,7 @@ export default function MapPage() {
   const readOnly = user?.role === 'operator';
 
   const [stations, setStations] = useState<Station[]>([]);
+  const [fitStations, setFitStations] = useState<Station[]>([]);
   const [activeReservations, setActiveReservations] = useState<Record<string, ActiveReservation>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -81,7 +84,7 @@ export default function MapPage() {
   const [lastReservation, setLastReservation] = useState<any>(null);
   const [focusedReservationStationId, setFocusedReservationStationId] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<StationFocusTarget | null>(null);
-  const markerRefs = useRef<Record<string, L.CircleMarker | null>>({});
+  const markerRefs = useRef<Record<string, L.Marker | null>>({});
   const reservationClockItems = useMemo<TimedReservation[]>(() => {
     const reservations = Object.values(activeReservations);
     if (lastReservation?.endTime) {
@@ -130,7 +133,9 @@ export default function MapPage() {
       if (appliedQuery) params.q = appliedQuery;
       if (providerId) params.providerId = providerId;
       const r = await api.get('/stations', { params });
-      setStations(r.data?.stations || []);
+      const nextStations = r.data?.stations || [];
+      setStations(nextStations);
+      setFitStations(nextStations);
       setLastSync(new Date());
     } catch (e: any) {
       setErr(e.response?.data?.message || e.message);
@@ -160,6 +165,11 @@ export default function MapPage() {
 
   // Apply status filters client-side using the design's tokens.
   const visible = useMemo(() => stations.filter(s => filters[API_TO_TOKEN[s.status]]), [stations, filters]);
+  const displayedStations = useMemo(() => {
+    if (!focusTarget?.station) return visible;
+    if (visible.some(station => station.stationId === focusTarget.station.stationId)) return visible;
+    return [focusTarget.station, ...visible];
+  }, [focusTarget, visible]);
 
   function clearStationFocus() {
     setFocusedReservationStationId(null);
@@ -168,11 +178,12 @@ export default function MapPage() {
 
   function recenterToCurrentStations() {
     clearStationFocus();
+    setFitStations(visible);
     setRecenterKey(key => key + 1);
   }
 
   async function getReservationStation(target: ReservationActionTarget): Promise<Station> {
-    const knownStation = target.station || stations.find(station => station.stationId === target.stationId);
+    const knownStation = stations.find(station => station.stationId === target.stationId) || target.station;
     if (knownStation) return knownStation;
 
     const r = await api.get(`/stations/${encodeURIComponent(target.stationId)}`);
@@ -191,10 +202,6 @@ export default function MapPage() {
       return;
     }
 
-    setFilters({ available: true, occupied: true, offline: true, unknown: true });
-    setProviderId('');
-    setNameQuery('');
-    setAppliedQuery('');
     setStations(current => (
       current.some(existing => existing.stationId === station.stationId)
         ? current.map(existing => existing.stationId === station.stationId ? { ...existing, ...station } : existing)
@@ -273,27 +280,24 @@ export default function MapPage() {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <MapViewportGuards />
-        <FitToStations stations={visible} recenterKey={recenterKey} />
+        <FitToStations stations={fitStations} recenterKey={recenterKey} />
         <FocusStation
           target={focusTarget}
           markerRefs={markerRefs}
         />
-        {visible.map(st => {
+        {displayedStations.map(st => {
           const token = API_TO_TOKEN[st.status];
-          const color = TOKEN_COLOR[token];
+          const focused = focusedReservationStationId === st.stationId;
           const activeReservation = liveActiveReservations[st.stationId];
           return (
-            <CircleMarker
+            <Marker
               key={st.stationId}
               ref={node => { markerRefs.current[st.stationId] = node; }}
-              center={[st.latitude, st.longitude]}
-              pathOptions={{
-                color: focusedReservationStationId === st.stationId ? 'var(--accent)' : 'white',
-                weight: focusedReservationStationId === st.stationId ? 5 : 3,
-                fillColor: color,
-                fillOpacity: 1
-              }}
-              radius={focusedReservationStationId === st.stationId ? 11 : 8}
+              position={[st.latitude, st.longitude]}
+              icon={focused ? FOCUSED_STATION_ICONS[token] : STATION_ICONS[token]}
+              title={st.stationId}
+              zIndexOffset={focused ? 1000 : 0}
+              riseOnHover
               eventHandlers={{
                 click: () => { api.get(`/stations/${encodeURIComponent(st.stationId)}`).catch(() => {}); }
               }}
@@ -307,7 +311,7 @@ export default function MapPage() {
                   onCancelReservation={() => activeReservation && cancelReservation(activeReservation)}
                 />
               </Popup>
-            </CircleMarker>
+            </Marker>
           );
         })}
       </MapContainer>
@@ -428,15 +432,41 @@ function ago(d: Date): string {
   return d.toLocaleTimeString();
 }
 
+function createStationIcons(focused: boolean): Record<'available' | 'occupied' | 'offline' | 'unknown', L.DivIcon> {
+  return (['available', 'occupied', 'offline', 'unknown'] as const).reduce((icons, token) => {
+    const size = focused ? 22 : 16;
+    icons[token] = L.divIcon({
+      className: `station-dot-marker station-dot-marker-${token}${focused ? ' station-dot-marker-focused' : ''}`,
+      html: `<span class="station-dot-marker-dot" style="background:${TOKEN_COLOR[token]}"></span>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -Math.ceil(size / 2)]
+    });
+    return icons;
+  }, {} as Record<'available' | 'occupied' | 'offline' | 'unknown', L.DivIcon>);
+}
+
 function FitToStations({ stations, recenterKey }: { stations: Station[]; recenterKey: number }) {
   const map = useMap();
   useEffect(() => {
     if (!stations.length) {
-      map.setView(ATHENS, 13);
+      map.flyTo(ATHENS, 13, {
+        animate: true,
+        duration: 0.9,
+        easeLinearity: 0.2
+      });
       return;
     }
     const bounds = L.latLngBounds(stations.map(s => [s.latitude, s.longitude] as [number, number]));
-    if (bounds.isValid()) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
+    if (bounds.isValid()) {
+      map.flyToBounds(bounds, {
+        padding: [60, 60],
+        maxZoom: 14,
+        animate: true,
+        duration: 0.95,
+        easeLinearity: 0.2
+      });
+    }
   }, [stations, map, recenterKey]);
   return null;
 }
@@ -446,7 +476,7 @@ function FocusStation({
   markerRefs
 }: {
   target: StationFocusTarget | null;
-  markerRefs: MutableRefObject<Record<string, L.CircleMarker | null>>;
+  markerRefs: MutableRefObject<Record<string, L.Marker | null>>;
 }) {
   const map = useMap();
 
@@ -455,16 +485,21 @@ function FocusStation({
     const station = target.station;
 
     const stationLatLng = L.latLng(station.latitude, station.longitude);
-    if (map.getZoom() < 13) {
-      map.setZoom(13, { animate: false });
-    }
-    map.panTo(stationLatLng, { animate: true, duration: 0.45 });
+    const targetZoom = Math.max(map.getZoom(), 15);
+    map.flyTo(stationLatLng, targetZoom, {
+      animate: true,
+      duration: 1.15,
+      easeLinearity: 0.18
+    });
 
-    const timers = [450, 900, 1400].map(delay => window.setTimeout(() => {
-      markerRefs.current[station.stationId]?.openPopup();
-    }, delay));
+    const openPopup = () => markerRefs.current[station.stationId]?.openPopup();
+    map.once('moveend', openPopup);
+    const timers = [1200, 1700].map(delay => window.setTimeout(openPopup, delay));
 
-    return () => timers.forEach(window.clearTimeout);
+    return () => {
+      map.off('moveend', openPopup);
+      timers.forEach(window.clearTimeout);
+    };
   }, [target?.key, map, markerRefs]);
 
   return null;
