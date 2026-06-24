@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -237,10 +238,10 @@ export default function MapPage() {
     } catch (e: any) {
       const msg = e.response?.data?.message || e.response?.data?.error || e.message;
       setToast({ kind: 'error', msg: `Reservation failed: ${msg}` });
-      
+
       // Ensure the modal closes even when the backend returns a 502 error
-      setReserving(null); 
-      
+      setReserving(null);
+
       setTimeout(() => setToast(null), 4000);
     }
   }
@@ -301,7 +302,7 @@ export default function MapPage() {
               zIndexOffset={focused ? 1000 : 0}
               riseOnHover
               eventHandlers={{
-                click: () => { api.get(`/stations/${encodeURIComponent(st.stationId)}`).catch(() => {}); }
+                click: () => { api.get(`/stations/${encodeURIComponent(st.stationId)}`).catch(() => { }); }
               }}
             >
               <Popup>
@@ -414,13 +415,13 @@ export default function MapPage() {
           <ReserveModal station={reserving} onCancel={() => setReserving(null)} onConfirm={m => reserve(reserving, m)} />
         </div>
       )}
-      
+
       {confirmation && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 9999, pointerEvents: 'none' }}>
           <ReservationToast data={confirmation} onDone={() => setConfirmation(null)} />
         </div>
       )}
-      
+
       {err && <div className="toast error" style={{ zIndex: 9999 }}>{err}</div>}
       {toast && <div className={`toast ${toast.kind}`} style={{ zIndex: 9999 }}>{toast.msg}</div>}
     </div>
@@ -619,7 +620,7 @@ function ReserveModal({ station, onCancel, onConfirm }: {
   const end = new Date(Date.now() + duration * 60_000).toTimeString().slice(0, 5);
   const energy = ((station.capacityKw || 22) * (duration / 60) * 0.65).toFixed(1);
   const estCost = station.pricePerKwh ? (Number(energy) * station.pricePerKwh).toFixed(2) : '—';
-  
+
   // Restored pointerEvents to 'auto' inside the modal so buttons are clickable
   return (
     <div className="modal-scrim" onClick={onCancel} style={{ pointerEvents: 'auto' }}>
@@ -640,8 +641,8 @@ function ReserveModal({ station, onCancel, onConfirm }: {
             </div>
           </div>
           <div style={{ background: 'var(--bg-sunk)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Row label="Reserved until"  value={end} mono />
-            <Row label="Est. energy"     value={`${energy} kWh`} />
+            <Row label="Reserved until" value={end} mono />
+            <Row label="Est. energy" value={`${energy} kWh`} />
             {station.pricePerKwh != null && <Row label="Energy rate" value={`€${station.pricePerKwh.toFixed(2)} / kWh`} />}
             <div style={{ height: 1, background: 'var(--border)' }} />
             <Row label={<strong>Estimated total</strong>} value={<strong>€{estCost}</strong>} />
@@ -686,9 +687,9 @@ function ReservationToast({ data, onDone }: { data: any; onDone: () => void }) {
           </div>
         </div>
         <div style={{ margin: '0 24px 18px', padding: 14, border: '1px solid var(--border)', borderRadius: 'var(--r-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <Row label="Confirmation"     value={<span className="t-mono">{data.confId}</span>} />
-          <Row label="Hold"              value={`${data.minutes} min`} />
-          <Row label="Platform fee"      value={`${data.cost} ${data.currency}`} />
+          <Row label="Confirmation" value={<span className="t-mono">{data.confId}</span>} />
+          <Row label="Hold" value={`${data.minutes} min`} />
+          <Row label="Platform fee" value={`${data.cost} ${data.currency}`} />
         </div>
         <div style={{ padding: '0 18px 18px', display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onDone}>Done</button>
