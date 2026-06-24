@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 
+const STATION_STATUSES = ['available', 'charging', 'reserved', 'malfunction', 'offline'];
+
 const stationCacheSchema = new mongoose.Schema({
   stationId:         { type: String, required: true, unique: true, index: true }, // providerId:externalId
   providerId:        { type: String, required: true, index: true },
@@ -7,7 +9,7 @@ const stationCacheSchema = new mongoose.Schema({
   name:              { type: String },
   latitude:          { type: Number, required: true },
   longitude:         { type: Number, required: true },
-  status:            { type: String, enum: ['AVAILABLE', 'OCCUPIED', 'OUT_OF_SERVICE', 'UNKNOWN'], default: 'UNKNOWN' },
+  status:            { type: String, enum: STATION_STATUSES, default: 'offline' },
   pricePerKwh:       { type: Number },
   capacityKw:        { type: Number },
   lastSyncedAt:      { type: Date, default: Date.now, index: true }

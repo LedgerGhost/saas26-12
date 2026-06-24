@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
+import { STATION_STATUS_LABEL, normalizeStationStatus } from './stationStatus';
 
 /* ─── Wordmark ─── */
 export function Wordmark() {
@@ -39,14 +40,12 @@ export function KPI({ label, value, delta, deltaDir = 'up', suffix = '', prefix 
 }
 
 /* ─── StatusBadge ─── */
-const STATUS_LABEL: Record<string, string> = {
-  available: 'Available', occupied: 'Occupied', offline: 'Out of service', unknown: 'Unknown'
-};
 export function StatusBadge({ status }: { status: string }) {
+  const stationStatus = normalizeStationStatus(status);
   return (
-    <span className={`badge badge-${status}`}>
+    <span className={`badge badge-station-${stationStatus}`}>
       <span className="dot" />
-      {STATUS_LABEL[status] || status}
+      {STATION_STATUS_LABEL[stationStatus]}
     </span>
   );
 }

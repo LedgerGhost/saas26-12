@@ -30,6 +30,16 @@
   --offline-soft: #fee2e2;
   --unknown: #71717a;
   --unknown-soft: #f4f4f5;
+  --station-available: #16a34a;
+  --station-available-soft: #dcfce7;
+  --station-charging: #f59e0b;
+  --station-charging-soft: #fef3c7;
+  --station-reserved: #2563eb;
+  --station-reserved-soft: #dbeafe;
+  --station-malfunction: #dc2626;
+  --station-malfunction-soft: #fee2e2;
+  --station-offline: #71717a;
+  --station-offline-soft: #f4f4f5;
 
   /* Radius */
   --r-1: 4px;
@@ -67,6 +77,11 @@
   --occupied-soft: rgba(245,158,11,.18);
   --offline-soft:  rgba(220,38,38,.18);
   --unknown-soft:  rgba(113,113,122,.18);
+  --station-available-soft: rgba(22,163,74,.18);
+  --station-charging-soft: rgba(245,158,11,.18);
+  --station-reserved-soft: rgba(37,99,235,.18);
+  --station-malfunction-soft: rgba(220,38,38,.18);
+  --station-offline-soft: rgba(113,113,122,.18);
   --accent-50:  rgba(79,70,229,.14);
   --accent-100: rgba(79,70,229,.22);
 }
@@ -203,6 +218,11 @@ input, select, textarea, button { font: inherit; }
 .badge-occupied  { background: var(--occupied-soft);  color: var(--occupied);  border-color: transparent; }
 .badge-offline   { background: var(--offline-soft);   color: var(--offline);   border-color: transparent; }
 .badge-unknown   { background: var(--unknown-soft);   color: var(--unknown);   border-color: transparent; }
+.badge-station-available { background: var(--station-available-soft); color: var(--station-available); border-color: transparent; }
+.badge-station-charging { background: var(--station-charging-soft); color: var(--station-charging); border-color: transparent; }
+.badge-station-reserved { background: var(--station-reserved-soft); color: var(--station-reserved); border-color: transparent; }
+.badge-station-malfunction { background: var(--station-malfunction-soft); color: var(--station-malfunction); border-color: transparent; }
+.badge-station-offline { background: var(--station-offline-soft); color: var(--station-offline); border-color: transparent; }
 .badge-accent    { background: var(--accent-50); color: var(--accent); border-color: transparent; }
 .badge-paid      { background: var(--available-soft); color: var(--available); border-color: transparent; }
 .badge-unpaid    { background: var(--occupied-soft); color: var(--occupied); border-color: transparent; }

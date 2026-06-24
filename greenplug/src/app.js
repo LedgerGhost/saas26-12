@@ -1,6 +1,11 @@
 const express = require('express');
 const axios = require('axios');
-const { toInternalStatus, logger, ValkeyCache } = require('@saasplug/shared-utils');
+const {
+  STATION_STATUSES,
+  normalizeStationStatus,
+  logger,
+  ValkeyCache
+} = require('@saasplug/shared-utils');
 
 const log = logger(`${process.env.PROVIDER_ID || 'provider'}-service`);
 
@@ -30,7 +35,7 @@ module.exports = function buildApp() {
     const dynamic = {};
     for (const p of arr) {
       dynamic[String(p.id)] = {
-        status: toInternalStatus(p.state),
+        status: normalizeStationStatus(p.state),
         pricePerKwh: p.kwhRateEur ?? null
       };
     }
@@ -68,6 +73,13 @@ module.exports = function buildApp() {
 
   app.get('/stations', async (req, res) => {
     try {
+      const requestedStatus = req.query.status
+        ? normalizeStationStatus(req.query.status, null)
+        : null;
+      if (req.query.status && !requestedStatus) {
+        return res.status(400).json({ error: 'INVALID_STATUS', validStatuses: STATION_STATUSES });
+      }
+
       let stations = await cache.get('stations');
       let dynamic = await cache.get('dynamic');
 
@@ -81,7 +93,8 @@ module.exports = function buildApp() {
           if (!stations) {
             return res.status(502).json({ error: 'PROVIDER_UNREACHABLE', providerId: PROVIDER_ID, message: fetchErr.message });
           }
-          return res.json(stations);
+          const fallback = stations.map(s => ({ ...s, status: normalizeStationStatus(s.status) }));
+          return res.json(requestedStatus ? fallback.filter(s => s.status === requestedStatus) : fallback);
         }
       }
 
@@ -99,13 +112,13 @@ module.exports = function buildApp() {
         const d = dynamic[s.externalStationId];
         return {
           ...s,
-          status: d?.status ?? s.status,
+          status: normalizeStationStatus(d?.status ?? s.status),
           pricePerKwh: d?.pricePerKwh ?? s.pricePerKwh,
           lastUpdatedAt: new Date().toISOString()
         };
       });
 
-      res.json(result);
+      res.json(requestedStatus ? result.filter(s => s.status === requestedStatus) : result);
     } catch (err) {
       log.error(`/stations failed: ${err.message}`);
       res.status(502).json({ error: 'PROVIDER_UNREACHABLE', providerId: PROVIDER_ID, message: err.message });
@@ -146,7 +159,7 @@ module.exports = function buildApp() {
         confirmed,
         providerId: PROVIDER_ID,
         externalStationId: String(body.id),
-        newStatus: toInternalStatus(body.state),
+        newStatus: normalizeStationStatus(body.state),
         endTime: confirmed ? parseTimestamp(body.reservedUntil) : null,
         chargeAmount: confirmed ? 0.50 : 0,
         currency: 'EUR'
@@ -170,7 +183,7 @@ function toStationDTO(p, providerId) {
     name:             p.locationName || `${providerId} #${p.id}`,
     latitude:         p.coords?.lat != null ? parseFloat(p.coords.lat) : null,
     longitude:        p.coords?.long != null ? parseFloat(p.coords.long) : null,
-    status:           toInternalStatus(p.state),
+    status:           normalizeStationStatus(p.state),
     pricePerKwh:      p.kwhRateEur ?? null,
     capacityKw:       p.cap ?? null,
     connector:        p.connector ?? null,

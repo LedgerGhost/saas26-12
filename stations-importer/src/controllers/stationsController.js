@@ -1,6 +1,12 @@
 const axios = require('axios');
 const StationCache = require('../models/StationCache');
-const { publish, logger } = require('@saasplug/shared-utils');
+const {
+  STATION_STATUSES,
+  normalizeStationStatus,
+  stationStatusQueryValues,
+  publish,
+  logger
+} = require('@saasplug/shared-utils');
 
 const log = logger('stations-service');
 const ORCH = () => process.env.ORCHESTRATOR_URL;
@@ -15,9 +21,14 @@ const CACHE_TTL_MS = (parseInt(process.env.STATIONS_CACHE_TTL_SEC, 10) || 300) *
  */
 exports.searchStations = async (req, res) => {
   const { lat, lng, radius, status, providerId, q, name } = req.query;
+  const normalizedStatus = status ? normalizeStationStatus(status, null) : null;
   const t0 = Date.now();
 
   try {
+    if (status && !normalizedStatus) {
+      return res.status(400).json({ error: 'INVALID_STATUS', validStatuses: STATION_STATUSES });
+    }
+
     // Decide cache freshness — we treat the cache as a single global pool
     const freshDoc = await StationCache.findOne().sort({ lastSyncedAt: -1 }).lean();
     const stale = !freshDoc || (Date.now() - new Date(freshDoc.lastSyncedAt).getTime() > CACHE_TTL_MS);
@@ -37,7 +48,7 @@ exports.searchStations = async (req, res) => {
             name: s.name,
             latitude: s.latitude,
             longitude: s.longitude,
-            status: s.status,
+            status: normalizeStationStatus(s.status),
             pricePerKwh: s.pricePerKwh,
             capacityKw: s.capacityKw,
             lastSyncedAt: new Date(s.lastUpdatedAt || Date.now())
@@ -57,7 +68,7 @@ exports.searchStations = async (req, res) => {
     // Apply filters server-side
     const query = {};
     if (providerId) query.providerId = providerId;
-    if (status)     query.status = status;
+    if (normalizedStatus) query.status = { $in: stationStatusQueryValues(normalizedStatus) };
 
     // Case-insensitive substring search on the station name (or stationId as a fallback).
     // Accept either ?q= (preferred, generic) or ?name= for clarity.
@@ -92,7 +103,7 @@ exports.searchStations = async (req, res) => {
     publish('station.searched', {
       userId: req.user?.id || null,
       providerId: providerId || null,
-      filters: { lat, lng, radius, status, providerId, q: term || null },
+      filters: { lat, lng, radius, status: normalizedStatus, providerId, q: term || null },
       providerCounts,
       resultCount: docs.length,
       ts: new Date().toISOString()
@@ -125,7 +136,7 @@ exports.getStationDetail = async (req, res) => {
     // Update cache opportunistically
     await StationCache.findOneAndUpdate(
       { stationId: detail.stationId },
-      { status: detail.status, pricePerKwh: detail.pricePerKwh, lastSyncedAt: new Date() },
+      { status: normalizeStationStatus(detail.status), pricePerKwh: detail.pricePerKwh, lastSyncedAt: new Date() },
       { upsert: false }
     );
 
@@ -153,7 +164,7 @@ function toDTO(d) {
     name: d.name,
     latitude: d.latitude,
     longitude: d.longitude,
-    status: d.status,
+    status: normalizeStationStatus(d.status),
     pricePerKwh: d.pricePerKwh,
     capacityKw: d.capacityKw,
     lastUpdatedAt: d.lastSyncedAt

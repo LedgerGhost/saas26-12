@@ -1,9 +1,10 @@
 const axios = require('axios');
 const StationCache = require('../models/StationCache');
+const { normalizeStationStatus } = require('@saasplug/shared-utils');
 
 /**
  * Consumes reservation.* events and keeps the StationCache fresh:
- *  - On reservation.confirmed: mark the station OCCUPIED immediately so subsequent
+ *  - On reservation.confirmed: mark the station reserved immediately so subsequent
  *    map searches reflect reality without waiting for the cache TTL. Then refresh
  *    from the upstream provider in the background.
  *  - On reservation.cancelled/rejected: opportunistically refresh from the provider.
@@ -13,11 +14,11 @@ module.exports = async function eventHandler(routingKey, payload) {
   if (!stationId) return;
 
   if (routingKey === 'reservation.confirmed') {
-    // 1) Optimistic in-cache update so the map shows OCCUPIED before the next refresh.
+    // 1) Optimistic in-cache update so the map shows reserved before the next refresh.
     try {
       await StationCache.findOneAndUpdate(
         { stationId },
-        { status: 'OCCUPIED', lastSyncedAt: new Date() },
+        { status: 'reserved', lastSyncedAt: new Date() },
         { upsert: false }
       );
     } catch (err) {
@@ -46,7 +47,7 @@ module.exports = async function eventHandler(routingKey, payload) {
       if (!d?.status) return;
       return StationCache.findOneAndUpdate(
         { stationId: d.stationId || stationId },
-        { status: d.status, pricePerKwh: d.pricePerKwh, lastSyncedAt: new Date() },
+        { status: normalizeStationStatus(d.status), pricePerKwh: d.pricePerKwh, lastSyncedAt: new Date() },
         { upsert: false }
       );
     })

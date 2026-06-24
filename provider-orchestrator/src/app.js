@@ -1,6 +1,11 @@
 const express = require('express');
 const axios = require('axios');
-const { logger, ValkeyCache } = require('@saasplug/shared-utils');
+const {
+  STATION_STATUSES,
+  normalizeStationStatus,
+  logger,
+  ValkeyCache
+} = require('@saasplug/shared-utils');
 
 const log = logger('provider-orchestrator');
 
@@ -21,7 +26,8 @@ module.exports = function buildApp() {
   const cache = new ValkeyCache(process.env.VALKEY_URL, 'orchestrator');
 
   async function refreshCaches(status) {
-    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const normalizedStatus = status ? normalizeStationStatus(status, null) : null;
+    const qs = normalizedStatus ? `?status=${encodeURIComponent(normalizedStatus)}` : '';
     const results = await Promise.allSettled(
       Object.entries(ADAPTERS).map(async ([id, urlFn]) => {
         const r = await axios.get(`${urlFn()}/stations${qs}`, { timeout: 8000 });
@@ -40,9 +46,12 @@ module.exports = function buildApp() {
       }
     }
 
-    const result = { stations, partial: errors.length > 0, errors };
+    const filteredStations = normalizedStatus
+      ? stations.filter(station => normalizeStationStatus(station.status, null) === normalizedStatus)
+      : stations;
+    const result = { stations: filteredStations, partial: errors.length > 0, errors };
 
-    const cacheKey = status ? `stations:status:${status}` : 'stations';
+    const cacheKey = normalizedStatus ? `stations:status:${normalizedStatus}` : 'stations';
     if (errors.length === 0) {
       await cache.set(cacheKey, result, CACHE_TTL);
     }
@@ -107,14 +116,18 @@ module.exports = function buildApp() {
   app.get('/stations', async (req, res) => {
     try {
       const status = req.query.status;
-      const cacheKey = status ? `stations:status:${status}` : 'stations';
+      const normalizedStatus = status ? normalizeStationStatus(status, null) : null;
+      if (status && !normalizedStatus) {
+        return res.status(400).json({ error: 'INVALID_STATUS', validStatuses: STATION_STATUSES });
+      }
+      const cacheKey = normalizedStatus ? `stations:status:${normalizedStatus}` : 'stations';
 
       const cached = await cache.get(cacheKey);
       if (cached) {
-        return res.json(cached);
+        return res.json(normalizeStationResult(cached, normalizedStatus));
       }
 
-      const result = await refreshCaches(status);
+      const result = await refreshCaches(normalizedStatus);
       res.json(result);
     } catch (err) {
       log.error(`/stations failed: ${err.message}`);
@@ -163,4 +176,15 @@ function parseStationId(s) {
   const externalId = s.slice(idx + 1);
   if (!ADAPTERS[providerId]) throw new Error(`Unknown providerId "${providerId}"`);
   return { providerId, externalId };
+}
+
+function normalizeStationResult(result, status = null) {
+  const stations = (result?.stations || []).map(station => ({
+    ...station,
+    status: normalizeStationStatus(station.status)
+  }));
+  return {
+    ...result,
+    stations: status ? stations.filter(station => station.status === status) : stations
+  };
 }

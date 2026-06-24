@@ -166,7 +166,7 @@ export default function MapPage() {
   }
   useEffect(() => { fetchActiveReservations(); /* eslint-disable-next-line */ }, [user?._id, readOnly]);
 
-  // Apply status filters client-side using the provider API status vocabulary.
+  // Apply status filters client-side using the API status vocabulary.
   const visible = useMemo(() => stations.filter(s => filters[s.status]), [stations, filters]);
   const displayedStations = useMemo(() => {
     if (!focusTarget?.station) return visible;
